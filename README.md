@@ -46,7 +46,6 @@ cp .env.example .env         # then fill in real values
 
 ## Running
 
-
 | Command                                                                 | What it does                                                        |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `npm run discover`                                                      | Login-only smoke check — confirms credentials/API_URL work         |
@@ -62,6 +61,14 @@ cp .env.example .env         # then fill in real values
 | `npm run load:csv`                                                      | Load test + raw per-request metrics CSV (`reports/raw-metrics.csv`) |
 | `npm run load:grafana`                                                  | Load test + live-streams metrics to Grafana (see below)             |
 | `npm run scenario:login` / `:client` / `:task` / `:assign` / `:project` | Run one step in isolation, for debugging                            |
+
+### Standalone Candidate Assessment (Avoid Rate Limits)
+
+To test candidate evaluation directly without creating a client, project, or candidate (which can trigger HTTP 429 rate limit blockages), run the assessment scenario standalone using a pre-existing candidate:
+
+```bash
+k6 run -e CANDIDATE_EMAIL=performer19@yopmail.com -e CANDIDATE_PASSWORD=Test@123 -e CANDIDATE_ORG_ID=dummy scenarios/candidateassessment.js
+```
 
 Load shape is configurable via env vars (`.env` or `-e` flags):
 `LOAD_VUS` (default 10), `LOAD_DURATION` (default 2m), `LOAD_RAMP_UP` /
@@ -85,10 +92,13 @@ cross-env LOAD_MODE=load LOAD_VUS=25 LOAD_DURATION=5m ANUM_API_ENABLED=false k6 
      persona field, isolating that no-persona path
 4. **Assign activities to the org**
 5. **Client Admin (via impersonation) creates Project**, imports the
-   **10 fixed candidates** from `data/candidates.csv`
+   **20 candidates** from `data/candidates.csv` with a `0.5s` delay between requests to avoid rate limits
 6. **Each candidate logs in** with email + `CANDIDATE_DEFAULT_PASSWORD`
-7. **Each candidate performs all assigned activities, one by one,
-   sequentially** — never in parallel, mirroring a real candidate session
+7. **Each candidate performs all assigned activities, one by one, sequentially** — never in parallel, mirroring a real candidate session
+
+### WebSocket Transcription (SITUATIONS vs Standard)
+- **Standard Activities (Role Play, Interview, Board Meeting, etc.)**: Stream multiple sequential turns over WebSocket via `'text-line'` events containing the candidate/persona responses.
+- **SITUATIONS Activities (Supply Chain Bottleneck Analysis)**: Send a single `'audio-line'` event containing the situation ID, candidate ID, session details, and a base64-encoded WebM audio payload in the `line` field (loaded from `utils/webmAudio.js`). The connection stays open for up to 5 seconds to wait for the backend's `'transcript-updated'` confirmation before disconnecting.
 
 ## Live Grafana Monitoring
 
