@@ -1,0 +1,36 @@
+{
+  "name": "symulate-k6-load-tests",
+  "version": "1.1.0",
+  "description": "k6 backend load testing suite for the Symulate AI platform — full flow: Super Admin login -> Create Client -> Create Activities (Role Play/Interview/Case/Situation/Board Meeting/Welcome) -> Assign to Org -> Client Admin (impersonated) Project + CSV candidate import -> Candidate login -> sequential activity completion. Supports with/without Talent Intelligence (Anum) and full/situation-only scenarios, plus live Grafana monitoring.",
+  "private": true,
+  "scripts": {
+    "discover": "k6 run tests/discover-login.js",
+    "smoke": "k6 run tests/smoke.js",
+    "smoke:no-anum": "cross-env ANUM_API_ENABLED=false k6 run tests/smoke.js",
+    "smoke:situation": "cross-env SCENARIO=situation-only k6 run tests/smoke.js",
+    "smoke:situation:no-anum": "cross-env SCENARIO=situation-only ANUM_API_ENABLED=false k6 run tests/smoke.js",
+    "load": "cross-env LOAD_MODE=load k6 run tests/smoke.js",
+    "load:no-anum": "cross-env LOAD_MODE=load ANUM_API_ENABLED=false k6 run tests/smoke.js",
+    "load:situation": "cross-env LOAD_MODE=load SCENARIO=situation-only k6 run tests/smoke.js",
+    "load:situation:no-anum": "cross-env LOAD_MODE=load SCENARIO=situation-only ANUM_API_ENABLED=false k6 run tests/smoke.js",
+    "load:all": "npm run load && npm run load:no-anum && npm run load:situation && npm run load:situation:no-anum",
+    "load:csv": "cross-env LOAD_MODE=load k6 run --out csv=reports/raw-metrics.csv tests/smoke.js",
+    "report:csv": "node scripts/generate-csv-report.js",
+    "monitoring:up": "docker compose -f monitoring/docker-compose.yml up -d",
+    "monitoring:down": "docker compose -f monitoring/docker-compose.yml down",
+    "monitoring:reset": "docker compose -f monitoring/docker-compose.yml down -v",
+    "load:grafana": "cross-env K6_INFLUXDB_PUSH_INTERVAL=3s LOAD_MODE=load k6 run --out influxdb=http://localhost:8087/k6 tests/smoke.js",
+    "load:grafana:no-anum": "cross-env K6_INFLUXDB_PUSH_INTERVAL=3s LOAD_MODE=load ANUM_API_ENABLED=false k6 run --out influxdb=http://localhost:8087/k6 tests/smoke.js",
+    "load:grafana:situation": "cross-env K6_INFLUXDB_PUSH_INTERVAL=3s LOAD_MODE=load SCENARIO=situation-only k6 run --out influxdb=http://localhost:8087/k6 tests/smoke.js",
+    "smoke:grafana": "cross-env K6_INFLUXDB_PUSH_INTERVAL=3s k6 run --out influxdb=http://localhost:8087/k6 tests/smoke.js",
+    "scenario:login": "k6 run scenarios/login.js",
+    "scenario:client": "k6 run scenarios/clientcreation.js",
+    "scenario:task": "k6 run scenarios/taskcreation.js",
+    "scenario:assign": "k6 run scenarios/taskassign.js",
+    "scenario:project": "k6 run scenarios/projectcreation.js",
+    "scenario:project:email": "cross-env SEND_PROJECT_INVITATIONS=true k6 run scenarios/projectcreation.js"
+  },
+  "devDependencies": {
+    "cross-env": "^10.0.0"
+  }
+}
