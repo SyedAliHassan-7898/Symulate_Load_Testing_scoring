@@ -54,7 +54,8 @@ export const options = {
               { duration: LOAD_DURATION, target: LOAD_VUS },
               { duration: LOAD_RAMP_DOWN, target: 0 }
             ],
-            gracefulRampDown: '30s'
+            gracefulRampDown: '5s',
+            gracefulStop: '5s'
           }
         }
       : {

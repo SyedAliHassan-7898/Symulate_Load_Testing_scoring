@@ -12,18 +12,25 @@
 
 import { check } from 'k6';
 import { postJson, patchJson, extractId } from '../utils/http.js';
-import { logStep, uniqueSuffix } from '../utils/helpers.js';
+import { logStep, log, uniqueSuffix } from '../utils/helpers.js';
 import { routes } from '../utils/routes.js';
 import { superAdminLogin } from './login.js';
-import { ANUM_API_ENABLED } from '../config/environments.js';
+import { ANUM_API_ENABLED, SEND_CLIENT_EMAIL } from '../config/environments.js';
 
 export function createClient(token) {
   const suffix = uniqueSuffix();
+  const clientEmail = `loadtest.admin.${suffix}@yopmail.com`;
   const payload = {
     organizationName: `Load Test Org ${suffix}`,
     name: `Load Test Admin ${suffix}`,
-    email: `loadtest.admin.${suffix}@yopmail.com`
+    email: clientEmail
   };
+
+  if (SEND_CLIENT_EMAIL) {
+    log('Create Client', `Client email: ${clientEmail} — email notification WILL be sent | verify on portal & yopmail`);
+  } else {
+    log('Create Client', `Client email: ${clientEmail} — email notification SKIPPED (SEND_CLIENT_EMAIL=false) | verify on portal`);
+  }
 
   const res = postJson(routes.organizations(), payload, token, 'Create Client');
   logStep('Create Client', res);

@@ -35,7 +35,7 @@ export const CREDENTIALS = {
 // `enableTalentIntelligence` field on the Organization, set via 
 // PATCH /organizations/{id} (UpdateOrganizationDto). See
 // scenarios/clientcreation.js.
-export const ANUM_API_ENABLED = String(__ENV.ANUM_API_ENABLED || 'true').toLowerCase() === 'true';
+export const ANUM_API_ENABLED = String(__ENV.ANUM_API_ENABLED || 'true').toLowerCase() !== 'false';
 
 // Which flow to execute:
 // full            -> all 6 activity types, persona selection on every type that needs one
@@ -47,7 +47,8 @@ export const SCENARIO = __ENV.SCENARIO || 'full';
 export const LOAD_MODE = __ENV.LOAD_MODE || 'smoke';
 
 export const NUM_CANDIDATES = Number(__ENV.NUM_CANDIDATES || 10);
-export const SEND_PROJECT_INVITATIONS = String(__ENV.SEND_PROJECT_INVITATIONS || 'true').toLowerCase() === 'false';
+export const SEND_PROJECT_INVITATIONS = String(__ENV.SEND_PROJECT_INVITATIONS || 'false').toLowerCase() !== 'false';
+export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLowerCase() !== 'false';
 
 // CONFIRMED gap (still open): POST /candidate/upload-candidates only
 // returns { totalRows, queued, errors } — no per-candidate credentials or
@@ -67,9 +68,9 @@ export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
   {
-    email: __ENV.CANDIDATE_EMAIL || 'performer19@yopmail.com',
+    email: __ENV.CANDIDATE_EMAIL || 'performer23@yopmail.com',
     password: __ENV.CANDIDATE_PASSWORD || 'Test@123',
-    candidateId: '37f65914-5dfa-4d52-9f6a-13b446c8ae0e'
+    candidateId: '3b76cd70-f232-4eb6-a71f-8abd802d9471'
   }
   // Add more candidates for load testing:
   // { email: 'performer2@yopmail.com', password: 'Test@123', candidateId: '0873bf73-1522-40d9-9bf9-1e354d2db5f9' },

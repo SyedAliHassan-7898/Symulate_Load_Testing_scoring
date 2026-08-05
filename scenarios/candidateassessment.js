@@ -133,34 +133,53 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
   const label = activity.title || activity.type || 'Unknown';
   const stepName = ANUM_API_ENABLED ? 'Submit Activity (Anum evaluation)' : 'Submit Activity';
 
-  if (!ANUM_API_ENABLED) {
-    return { status: 0, skipped: true };
-  }
+  // DEBUG: log values being sent to API
+  log('SubmitActivity', `projectId=${HARDCODED_PROJECT_ID} activityId=${activityId} candidateId=${candidateId} type=${activity.type}`);
 
   // ------------------------------------------------------------------
   // Step 1: Start session (endpoint varies by activity type)
   // ------------------------------------------------------------------
   let sessionRes;
   let personaId = null;
-  if (activity.type === 'BOARD_MEETING') {
-    // Board Meeting needs a personaId for session-token
-    // Use the first persona from the board meeting activity details
-    personaId = activity.boardMeetingActivity?.id || '30d457a4-5ef1-41ae-bb58-a144d48c0a00';
-    sessionRes = postJson(
-      routes.startBoardMeetingSession(activityId, personaId, HARDCODED_PROJECT_ID),
-      {},
-      candidateToken,
-      stepName
-    );
-  } else {
-    // CASE, WELCOME, SITUATIONS, ROLE_PLAY, INTERVIEW all use the same session-token endpoint
-    sessionRes = postJson(
-      routes.startSession(),
-      { projectId: HARDCODED_PROJECT_ID, activityId },
-      candidateToken,
-      stepName
-    );
+  
+  function startSessionRequest() {
+    if (activity.type === 'BOARD_MEETING') {
+      personaId = activity.boardMeetingActivity?.id || '30d457a4-5ef1-41ae-bb58-a144d48c0a00';
+      return postJson(
+        routes.startBoardMeetingSession(activityId, personaId, HARDCODED_PROJECT_ID),
+        {},
+        candidateToken,
+        stepName
+      );
+    } else {
+      return postJson(
+        routes.startSession(),
+        { projectId: HARDCODED_PROJECT_ID, activityId },
+        candidateToken,
+        stepName
+      );
+    }
   }
+
+  sessionRes = startSessionRequest();
+  
+  // Handle 409 Conflict - active session from previous run
+  if (sessionRes.status === 409) {
+    try {
+      const errorBody = sessionRes.json();
+      const activeSessionId = errorBody?.details?.activeSession?.sessionId;
+      if (activeSessionId) {
+        log('SubmitActivity', `Ending active session ${activeSessionId} from previous run`);
+        const completeRes = postJson(routes.completeSession(activeSessionId), {}, candidateToken, 'Complete Stale Session');
+        logStep('Complete Stale Session', completeRes);
+        sleep(1);
+        sessionRes = startSessionRequest(); // Retry
+      }
+    } catch (e) {
+      log('SubmitActivity', `Failed to handle 409: ${e}`);
+    }
+  }
+  
   logStep(`${stepName} - start session (${label})`, sessionRes);
   const sessionId = extractId(sessionRes, 'sessionId');
   check(sessionRes, { [`start session (${label}): status 2xx`]: (r) => r.status >= 200 && r.status < 300 });
@@ -261,9 +280,14 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
 // organizationId is needed for the assignedActivities endpoint.
 // All activity types are processed: CASE, WELCOME, SITUATIONS, ROLE_PLAY, INTERVIEW, BOARD_MEETING
 export function performAllActivities(email, password, candidateId, activities, organizationId) {
+  log('Flow', `Candidate login: ${email} candidateId=${candidateId} orgId=${organizationId}`);
   const loginResult = candidateLogin(email, password);
   const candidateToken = loginResult && loginResult.token;
-  if (!candidateToken) return [];
+  if (!candidateToken) {
+    log('Flow', `Candidate login FAILED for ${email} — no token returned`);
+    return [];
+  }
+  log('Flow', `Candidate login SUCCESS for ${email} — orgId from login: ${loginResult.organizationId}`);
 
   // Use organizationId from login response if available, otherwise use the one passed in
   const orgId = loginResult.organizationId || organizationId;

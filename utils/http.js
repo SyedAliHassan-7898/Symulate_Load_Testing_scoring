@@ -6,10 +6,16 @@
 // and a single place to add retry/backoff later if needed.
 
 import http from 'k6/http';
+import { sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 
 export const recvBytes = new Counter('recv_bytes');
 export const sentBytes = new Counter('sent_bytes');
+
+// Retry configuration for 429 (Too Many Requests) responses.
+// Retries up to MAX_RETRIES times with exponential backoff.
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_SEC = 2;
 
 function recordBytes(res, name) {
   const received = res && res.body ? res.body.length : 0;
@@ -28,26 +34,51 @@ function headers(token, extra = {}) {
   return merged;
 }
 
+// Executes an HTTP call and retries on 429 (rate limit) with exponential backoff.
+// Returns the final response (which may still be 429 if all retries exhausted).
+function requestWithRetry(fn, name) {
+  let res = fn();
+  for (let attempt = 1; attempt <= MAX_RETRIES && res && res.status === 429; attempt++) {
+    const waitSec = BASE_BACKOFF_SEC * attempt; // 2s, 4s, 6s
+    console.log(`[RETRY] ${name} — 429 rate limited, retry ${attempt}/${MAX_RETRIES} after ${waitSec}s`);
+    sleep(waitSec);
+    res = fn();
+  }
+  return res;
+}
+
 export function getJson(url, token, name) {
-  const res = http.get(url, { headers: headers(token), tags: { name } });
+  const res = requestWithRetry(
+    () => http.get(url, { headers: headers(token), tags: { name } }),
+    name
+  );
   recordBytes(res, name);
   return res;
 }
 
 export function postJson(url, body, token, name) {
-  const res = http.post(url, JSON.stringify(body), { headers: headers(token), tags: { name } });
+  const res = requestWithRetry(
+    () => http.post(url, JSON.stringify(body), { headers: headers(token), tags: { name } }),
+    name
+  );
   recordBytes(res, name);
   return res;
 }
 
 export function patchJson(url, body, token, name) {
-  const res = http.patch(url, JSON.stringify(body), { headers: headers(token), tags: { name } });
+  const res = requestWithRetry(
+    () => http.patch(url, JSON.stringify(body), { headers: headers(token), tags: { name } }),
+    name
+  );
   recordBytes(res, name);
   return res;
 }
 
 export function postMultipart(url, fields, token, name) {
-  const res = http.post(url, fields, { headers: headers(token, { 'Content-Type': undefined }), tags: { name } });
+  const res = requestWithRetry(
+    () => http.post(url, fields, { headers: headers(token, { 'Content-Type': undefined }), tags: { name } }),
+    name
+  );
   recordBytes(res, name);
   return res;
 }
