@@ -56,6 +56,15 @@ export function getJson(url, token, name) {
   return res;
 }
 
+export function getJsonWithHeaders(url, token, name, extraHeaders = {}) {
+  const res = requestWithRetry(
+    () => http.get(url, { headers: headers(token, extraHeaders), tags: { name } }),
+    name
+  );
+  recordBytes(res, name);
+  return res;
+}
+
 export function postJson(url, body, token, name) {
   const res = requestWithRetry(
     () => http.post(url, JSON.stringify(body), { headers: headers(token), tags: { name } }),
@@ -65,9 +74,27 @@ export function postJson(url, body, token, name) {
   return res;
 }
 
+export function postJsonWithHeaders(url, body, token, name, extraHeaders = {}) {
+  const res = requestWithRetry(
+    () => http.post(url, JSON.stringify(body), { headers: headers(token, extraHeaders), tags: { name } }),
+    name
+  );
+  recordBytes(res, name);
+  return res;
+}
+
 export function patchJson(url, body, token, name) {
   const res = requestWithRetry(
     () => http.patch(url, JSON.stringify(body), { headers: headers(token), tags: { name } }),
+    name
+  );
+  recordBytes(res, name);
+  return res;
+}
+
+export function patchJsonWithHeaders(url, body, token, name, extraHeaders = {}) {
+  const res = requestWithRetry(
+    () => http.patch(url, JSON.stringify(body), { headers: headers(token, extraHeaders), tags: { name } }),
     name
   );
   recordBytes(res, name);

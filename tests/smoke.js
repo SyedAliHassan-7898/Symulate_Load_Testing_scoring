@@ -34,6 +34,7 @@ import { assignTasksToOrg } from '../scenarios/taskassign.js';
 import { setupAccountAndSkillsProfile } from '../scenarios/accountsetup.js';
 import { completeProjectCreationFlow } from '../scenarios/projectcreation.js';
 import { performAllActivities, getActivitiesFromProject } from '../scenarios/candidateassessment.js';
+import { projectReviewLogin, completeHardcodedProjectReviewFlow } from '../scenarios/projectreview.js';
 
 const LOAD_VUS = Number(__ENV.LOAD_VUS || 10);
 const LOAD_DURATION = __ENV.LOAD_DURATION || '2m';
@@ -113,6 +114,11 @@ export default function () {
       if (!candidate.email) return;
       performAllActivities(candidate.email, candidate.password, candidate.candidateId, candidateActivities, projectOrgId);
     });
+
+    const reviewToken = projectReviewLogin();
+    if (reviewToken) {
+      completeHardcodedProjectReviewFlow(reviewToken);
+    }
 
     sleep(1);
   } catch (err) {

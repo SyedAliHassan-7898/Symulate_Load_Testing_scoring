@@ -57,6 +57,18 @@ export const routes = {
   assignActivityToOrganizations: () => `${API_URL}/activities/assign-to-organizations`, // CONFIRMED, body { activityId, organizationIds }
   assignedActivities: (projectId, organizationId) => `${API_URL}/activities/assigned-activities?organizationId=${organizationId}&projectId=${projectId}`, // CONFIRMED — needs both organizationId + projectId query params
   scoringProjectCandidates: (projectId) => `${API_URL}/scoring/projects/${projectId}/candidates`, // CONFIRMED — returns candidates with their assigned activities per stage
+  scoringProjectCandidateStages: (projectId, candidateId, page = 1, limit = 10) =>
+    `${API_URL}/scoring/projects/${projectId}/candidates/stages?page=${page}&limit=${limit}&candidateId=${candidateId}`, // CONFIRMED via project review HAR
+  scoringProjectCandidateActivity: (projectId, candidateId, activityId) =>
+    `${API_URL}/scoring/projects/${projectId}/candidates/${candidateId}?activityId=${activityId}`, // CONFIRMED via project review HAR
+  reviewProjectCandidate: (projectId, candidateId) =>
+    `${API_URL}/scoring/projects/${projectId}/candidates/${candidateId}/review`, // CONFIRMED via project review HAR
+  projectCandidateReviewSummary: (projectId, candidateId, stageId) =>
+    `${API_URL}/scoring/projects/${projectId}/candidates/${candidateId}/summary?stageId=${stageId}`, // CONFIRMED via project review HAR
+  submitProjectCandidateStageReview: (projectId, candidateId, stageId) =>
+    `${API_URL}/scoring/projects/${projectId}/candidates/${candidateId}/stages/${stageId}/submit-review`, // CONFIRMED via project review HAR
+  projectCandidateStageReport: (projectId, stageId, candidateId) =>
+    `${API_URL}/stages/projects/${projectId}/stages/${stageId}/candidates/${candidateId}/report`, // CONFIRMED via project review HAR
 
   rolePlayActivities: () => `${API_URL}/role-play-activities`, // CONFIRMED from UI capture: PATCH body needs { id, personaId, scenarioDescription, ... }
   interviewActivities: () => `${API_URL}/interview-activities`, // CONFIRMED, body needs { activityId, personaId, interviewQuestions, ... }

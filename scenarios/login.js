@@ -63,10 +63,25 @@ export function impersonateClientAdmin(superAdminToken, adminUserId) {
     'Impersonate Client Admin (start)'
   );
   logStep('Impersonate Client Admin (start)', startRes);
-  const impersonationToken = extractToken(startRes) || safeField(startRes, 'token');
+  const directAccessToken = safeField(startRes, 'accessToken') || safeField(startRes, 'access_token');
+  if (directAccessToken) {
+    check(startRes, {
+      'impersonate start: status 2xx': (r) => r.status >= 200 && r.status < 300,
+      'impersonate start: access token returned': () => !!directAccessToken
+    });
+
+    const verifiedDirectToken = verifyImpersonationToken(directAccessToken);
+    return verifiedDirectToken || directAccessToken;
+  }
+
+  const impersonationToken = safeField(startRes, 'token');
   check(startRes, { 'impersonate start: status 2xx': (r) => r.status >= 200 && r.status < 300 });
   if (!impersonationToken) return null;
 
+  return verifyImpersonationToken(impersonationToken);
+}
+
+function verifyImpersonationToken(impersonationToken) {
   const verifyRes = postJson(
     routes.verifyImpersonateUser(),
     { token: impersonationToken },
