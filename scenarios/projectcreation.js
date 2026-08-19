@@ -35,12 +35,13 @@ import { SEND_PROJECT_INVITATIONS } from '../config/environments.js';
 
 const candidatesCsv = open('../data/candidates.csv');
 const candidatesFromCsv = parseCandidatesCsv(candidatesCsv);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function createProject(clientToken, orgId) {
   const suffix = uniqueSuffix();
   const payload = {
-    title: `Load Test Project ${suffix}`,
-    description: 'Created by k6 load test suite'
+    title: `Candidate Perform with timer ${suffix}`,
+    description: ''
   };
 
   const res = postJson(routes.createProject(orgId), payload, clientToken, 'Create Project');
@@ -51,6 +52,35 @@ export function createProject(clientToken, orgId) {
     'create project: id returned': () => !!projectId
   });
   return projectId;
+}
+
+export function configureProjectAvailability(clientToken, projectId) {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(11, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  const payload = {
+    availabilityStart: start.toISOString(),
+    availabilityEnd: end.toISOString(),
+    maxAssessmentDurationMinutes: 105,
+    durationBufferMinutes: 15,
+    minimumLeadTimeMinutes: 2,
+    slotIntervalMinutes: 15,
+    slotIntervalMinutesQuiet: 5,
+    anamHardLimit: 100,
+    bookingCapacityPercent: 5,
+    rescheduleCutoffMinutes: 30,
+    noShowGracePeriodMinutes: 15
+  };
+
+  const res = postJson(routes.projectAvailabilityConfig(projectId), payload, clientToken, 'Configure Project Availability');
+  logStep('Configure Project Availability', res);
+  check(res, {
+    'configure project availability: status 2xx': (r) => r.status >= 200 && r.status < 300
+  });
+  return res;
 }
 
 export function assignRoleProfileToProject(clientToken, projectId, roleProfileId) {
@@ -81,17 +111,29 @@ export function createProjectStage(clientToken, projectId) {
 }
 
 export function assignActivitiesToStage(clientToken, stageId, activities) {
+  const assignableActivities = (Array.isArray(activities) ? activities : [])
+    .filter((activity) => activity && activity.activityId && UUID_RE.test(String(activity.activityId)));
+  const skippedActivities = (Array.isArray(activities) ? activities : []).filter(
+    (activity) => !activity || !activity.activityId || !UUID_RE.test(String(activity.activityId))
+  );
+
+  if (skippedActivities.length) {
+    console.log(
+      `[${new Date().toISOString()}] [VU ${__VU}] Project Creation: skipping ${skippedActivities.length} activity record(s) without a valid activityId before stage assignment`
+    );
+  }
+
   const payload = {
     assignments: [{
       stageId,
-      activityIds: activities.map((activity) => activity.activityId)
+      activityIds: assignableActivities.map((activity) => activity.activityId)
     }]
   };
   const res = postJson(routes.assignStageActivitiesBulk(), payload, clientToken, 'Assign Activities to Stage');
   logStep('Assign Activities to Stage', res);
   check(res, {
     'assign activities to stage: status 2xx': (r) => r.status >= 200 && r.status < 300,
-    'assign activities to stage: all activities assigned': (r) => responseListFromRes(r).length === activities.length
+    'assign activities to stage: all activities assigned': (r) => responseListFromRes(r).length === assignableActivities.length
   });
   return res;
 }
@@ -256,6 +298,7 @@ export function completeProjectCreationFlow(clientToken, projectOrgId, roleProfi
 
   const projectId = createProject(clientToken, projectOrgId);
   if (roleProfileId) assignRoleProfileToProject(clientToken, projectId, roleProfileId);
+  configureProjectAvailability(clientToken, projectId);
 
   getJson(routes.bandsList(), clientToken, 'Get Bands');
   getJson(routes.activitiesList(), clientToken, 'Get Activities for Project Setup');

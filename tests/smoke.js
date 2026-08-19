@@ -20,8 +20,8 @@
 
 import { sleep } from 'k6';
 import exec from 'k6/execution';
-import { htmlReport } from 'https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
+import { htmlReport } from '../utils/local-report.js';
 
 import { buildThresholds } from '../config/thresholds.js';
 import { LOAD_MODE, SCENARIO, ANUM_API_ENABLED, HARDCODED_CANDIDATES } from '../config/environments.js';

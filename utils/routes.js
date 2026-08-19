@@ -85,6 +85,7 @@ export const routes = {
   activityMails: () => `${API_URL}/activity-mails`,
   activityContacts: () => `${API_URL}/activity-contacts`,
   bulkUpdateActivityContactDurations: () => `${API_URL}/activity-contacts/bulk-update-durations`,
+  publishActivity: (activityId) => `${API_URL}/activities/${activityId}/publish`,
 
   // --- Projects / Candidates ---------------------------------------------
   analyzeProjectUrl: () => `${API_URL}/project/analyze-url`, // CONFIRMED via client-admin role profile flow
@@ -94,6 +95,7 @@ export const routes = {
   assignRoleProfileToProject: () => `${API_URL}/role-profile/assign-to-project`, // CONFIRMED via project creation flow
   createProject: (orgId) => `${API_URL}/project/create-project/${orgId}`, // CONFIRMED, body { title, description }
   projectById: (id) => `${API_URL}/project/get-project-by-id/${id}`, // CONFIRMED
+  projectAvailabilityConfig: (projectId) => `${API_URL}/projects/${projectId}/availability-config`, // CONFIRMED via project creation HAR
   allProjects: (page = 1, limit = 10) => `${API_URL}/project/all-projects?page=${page}&limit=${limit}`, // CONFIRMED via project creation flow
   bandsList: (page = 1, limit = 10) => `${API_URL}/band/list?page=${page}&limit=${limit}`, // CONFIRMED via project creation flow
   stages: () => `${API_URL}/stages`, // CONFIRMED via project creation flow

@@ -68,9 +68,9 @@ export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
   {
-    email: __ENV.CANDIDATE_EMAIL || 'performer24@yopmail.com',
+    email: __ENV.CANDIDATE_EMAIL || 'candidate001@yopmail.com',
     password: __ENV.CANDIDATE_PASSWORD || 'Test@123',
-    candidateId: 'db3a4254-7cc4-46fa-bbee-070ac66b9323'
+    candidateId: '84ffba92-1a8e-4dc4-b3c1-4ee04592c738'
   }
   // Add more candidates for load testing:
   // { email: 'performer2@yopmail.com', password: 'Test@123', candidateId: '0873bf73-1522-40d9-9bf9-1e354d2db5f9' },
@@ -80,4 +80,4 @@ export const HARDCODED_CANDIDATES = [
 // Hardcoded project ID for candidate assessment (pre-existing project with
 // activities already assigned to the hardcoded candidates above).
 export const HARDCODED_PROJECT_ID =
-  __ENV.HARDCODED_PROJECT_ID || 'b635a571-7549-4280-aa6c-71d6ccaf6c04';
+  __ENV.HARDCODED_PROJECT_ID || 'beda7645-bd14-4142-9b26-65023db61cd8';

@@ -199,6 +199,9 @@ export function createAllTaskTypes(token) {
       [`create task detail (${label}): status 2xx`]: (r) => r.status >= 200 && r.status < 300
     });
 
+    const publishRes = postJson(routes.publishActivity(activityId), {}, token, 'Publish Activity');
+    logStep(`Publish Activity (${label})`, publishRes);
+
     createdActivities.push({ activityId, type, label });
   });
 
