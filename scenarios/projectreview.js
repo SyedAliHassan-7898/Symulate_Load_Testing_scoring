@@ -11,7 +11,7 @@ import { check, sleep } from 'k6';
 import { getJson, getJsonWithHeaders, postJsonWithHeaders, patchJsonWithHeaders } from '../utils/http.js';
 import { log, logStep } from '../utils/helpers.js';
 import { routes } from '../utils/routes.js';
-import { PORTALS, HARDCODED_CANDIDATES, HARDCODED_PROJECT_ID } from '../config/environments.js';
+import { PORTALS, HARDCODED_CANDIDATES } from '../config/environments.js';
 import { superAdminLogin, clientAdminLogin, impersonateClientAdmin } from './login.js';
 
 const REVIEW_REASON = __ENV.PROJECT_REVIEW_REASON || 'good';
@@ -24,7 +24,12 @@ const CLIENT_ADMIN_HEADERS = {
 };
 
 function reviewProjectId() {
-  return __ENV.PROJECT_REVIEW_PROJECT_ID || __ENV.REVIEW_PROJECT_ID || HARDCODED_PROJECT_ID;
+  return (
+    __ENV.PROJECT_REVIEW_PROJECT_ID ||
+    __ENV.REVIEW_PROJECT_ID ||
+    HARDCODED_CANDIDATES[0]?.projectId ||
+    null
+  );
 }
 
 export function projectReviewLogin() {

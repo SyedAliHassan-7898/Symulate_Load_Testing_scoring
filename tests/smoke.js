@@ -33,7 +33,7 @@ import { createAllTaskTypes } from '../scenarios/taskcreation.js';
 import { assignTasksToOrg } from '../scenarios/taskassign.js';
 import { setupAccountAndSkillsProfile } from '../scenarios/accountsetup.js';
 import { completeProjectCreationFlow } from '../scenarios/projectcreation.js';
-import { performAllActivities, getActivitiesFromProject } from '../scenarios/candidateassessment.js';
+import { performAllActivities, getActivitiesFromProject, getHardcodedProjectCandidateId } from '../scenarios/candidateassessment.js';
 import { projectReviewLogin, completeHardcodedProjectReviewFlow } from '../scenarios/projectreview.js';
 
 const LOAD_VUS = Number(__ENV.LOAD_VUS || 10);
@@ -102,22 +102,43 @@ export default function () {
     const projectOrgId = setup.accountOrgId || orgId;
     const project = completeProjectCreationFlow(clientToken, projectOrgId, setup.roleProfileId, activities);
 
+    // NOTE: `project` here is a freshly-created project used for the
+    // client-admin/task-setup portion of this run. Candidate-side calls
+    // below intentionally do NOT use it — they target HARDCODED_PROJECT_ID
+    // / HARDCODED_CANDIDATES (config/environments.js), a project + candidate
+    // pre-provisioned and verified by hand, because a real yopmail
+    // signup->candidate flow is blocked by captcha and can't be automated.
+    // Do not thread `project.projectId` into the candidate flow.
+
     // 6 & 7. Each hardcoded candidate logs in and performs all assigned
     // activities, one by one, sequentially — mirrors a real candidate
     // working through their assessment. Uses known credentials instead
     // of CSV-imported candidates (whose passwords are unknown).
     // Fetch activities dynamically from project details using admin token
     // (candidate token has kid header issue on assignedActivities endpoint).
-    const candidateActivities = getActivitiesFromProject(clientToken, HARDCODED_CANDIDATES[0]?.candidateId);
+    const hardcodedCandidate = HARDCODED_CANDIDATES[0];
+    const projectCandidateId = getHardcodedProjectCandidateId(clientToken, hardcodedCandidate?.email);
+    const candidateActivities = getActivitiesFromProject(clientToken, projectCandidateId || hardcodedCandidate?.candidateId);
     
+    let performedResults = [];
     HARDCODED_CANDIDATES.forEach((candidate) => {
       if (!candidate.email) return;
-      performAllActivities(candidate.email, candidate.password, candidate.candidateId, candidateActivities, projectOrgId);
+      performedResults = performedResults.concat(performAllActivities(
+        candidate.email,
+        candidate.password,
+        candidate.candidateId,
+        candidateActivities,
+        projectOrgId,
+        projectCandidateId
+      ));
     });
 
-    const reviewToken = projectReviewLogin();
+    const hasCompletedActivity = performedResults.some((result) => result && result.status >= 200 && result.transcriptConfirmed);
+    const reviewToken = hasCompletedActivity ? projectReviewLogin() : null;
     if (reviewToken) {
       completeHardcodedProjectReviewFlow(reviewToken);
+    } else {
+      log('Project Review', 'SKIPPED — no hardcoded candidate activity produced a completed transcript');
     }
 
     sleep(1);
