@@ -150,13 +150,196 @@ export function acceptCandidateAgreement(candidateToken, candidateId, projectId 
   return res.status >= 200 && res.status < 300;
 }
 
-export function submitActivity(candidateToken, candidateId, activity, candidateName = 'Candidate') {
+function responseData(res) {
+  try {
+    const body = res.json();
+    return body && body.data ? body.data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function ensureCandidateBooking(candidateToken, projectId) {
+  const candidateOrigin = __ENV.CANDIDATE_URL || 'https://symulate-ai-dev.weuno.co';
+  const candidateHeaders = { Origin: candidateOrigin, Referer: `${candidateOrigin}/` };
+
+  const bookingRes = getJsonWithHeaders(routes.candidateMyBooking(projectId), candidateToken, 'Get Candidate Booking', candidateHeaders);
+  logStep('Get Candidate Booking', bookingRes);
+
+  // A 404 here has two very different causes and they must NOT be treated
+  // the same way:
+  //  - "Candidate is not assigned to this project" -> resolveAssignment()
+  //    failed on the backend. This is a HARD STOP. No amount of retrying,
+  //    booking, or polling entry-check will ever fix it — canEnter/
+  //    entry-check will just return NO_ACTIVE_BOOKING forever because there
+  //    is nothing to attach a booking to. Re-run the assignment (manually,
+  //    or via bulk-assign) before re-running this script.
+  //  - Any other 404 shape -> genuinely "no booking configured yet", which
+  //    is fine to proceed past by creating one below.
+  if (bookingRes.status === 404) {
+    let message = '';
+    try {
+      message = (bookingRes.json() || {}).message || '';
+    } catch (e) {
+      message = '';
+    }
+    if (/not assigned to this project/i.test(message)) {
+      log(
+        'Flow',
+        `HARD STOP: candidate is not assigned to project ${projectId} (backend: "${message}"). ` +
+          'This is a data/assignment problem, not something a booking call or entry-check retry can fix — ' +
+          're-assign this candidate to the project before re-running.'
+      );
+      return false;
+    }
+  }
+
+  check(bookingRes, {
+    'get candidate booking: status 2xx or no booking configured': (r) => (r.status >= 200 && r.status < 300) || r.status === 404
+  });
+
+  let booking = responseData(bookingRes);
+  if (booking && booking.booking) booking = booking.booking;
+
+  if (!booking || !booking.id || booking.status !== 'BOOKED') {
+    const bookedOk = bookEarliestSlot(candidateToken, projectId, candidateHeaders);
+    if (!bookedOk) return false;
+  }
+
+  // Gate on entry-check the same way the real candidate portal does —
+  // canEnter must be true before starting a session. Reasons fall into
+  // three buckets, and each must be handled differently:
+  //  - NOT_YET_TIME: genuinely transient — the booking exists but the
+  //    window hasn't opened. Safe to poll, bounded by maxWaitMs.
+  //  - NO_ACTIVE_BOOKING: if we just booked (above) and entry-check still
+  //    can't see it, that's either replication lag (worth a SHORT bounded
+  //    retry) or a real problem (booking silently failed server-side /
+  //    was never persisted). It must NEVER be retried indefinitely — if
+  //    a booking truly doesn't exist, waiting longer will not create one.
+  //  - anything else: hard stop immediately, no retry.
+  const maxWaitMs = 60000;
+  const pollIntervalMs = 3000;
+  const maxNoActiveBookingRetries = 3;
+  let waited = 0;
+  let noActiveBookingRetries = 0;
+
+  for (;;) {
+    const entryRes = getJsonWithHeaders(
+      routes.candidateBookingEntryCheck(projectId, new Date().toISOString()),
+      candidateToken,
+      'Booking Entry Check',
+      candidateHeaders
+    );
+    logStep('Booking Entry Check', entryRes);
+    const entry = responseData(entryRes) || {};
+
+    if (entry.canEnter) {
+      return true;
+    }
+
+    if (entry.reason === 'NOT_YET_TIME' && waited < maxWaitMs) {
+      log('Flow', `Booking not open yet (${entry.reason}) for ${projectId} — waiting ${pollIntervalMs}ms and re-checking.`);
+      sleep(pollIntervalMs / 1000);
+      waited += pollIntervalMs;
+      continue;
+    }
+
+    if (entry.reason === 'NO_ACTIVE_BOOKING' && noActiveBookingRetries < maxNoActiveBookingRetries) {
+      noActiveBookingRetries++;
+      log(
+        'Flow',
+        `entry-check says NO_ACTIVE_BOOKING (attempt ${noActiveBookingRetries}/${maxNoActiveBookingRetries}) for ${projectId} — ` +
+          'short bounded retry in case of replication lag, NOT an infinite retry.'
+      );
+      sleep(2);
+      continue;
+    }
+
+    log('Flow', `HARD STOP: entry-check denied for ${projectId} — reason: ${entry.reason || 'unknown'} (no further retries).`);
+    return false;
+  }
+}
+
+// Fetches available slots and books the earliest one. Handles the TOCTOU
+// race where the slot offered by GET /booking-slots can fall just behind
+// the backend's live "minimum lead time" floor by the time POST /book
+// lands a few hundred ms later (backend recomputes `now` fresh on each
+// call) — retries once against a freshly-fetched slot before giving up.
+function bookEarliestSlot(candidateToken, projectId, candidateHeaders, attempt = 1) {
+  const maxAttempts = 2;
+
+  const slotsRes = getJsonWithHeaders(routes.candidateBookingSlots(projectId), candidateToken, 'Get Booking Slots', candidateHeaders);
+  logStep('Get Booking Slots', slotsRes);
+  check(slotsRes, {
+    'get booking slots: status 2xx': (r) => r.status >= 200 && r.status < 300
+  });
+
+  if (slotsRes.status === 404) {
+    let message = '';
+    try {
+      message = (slotsRes.json() || {}).message || '';
+    } catch (e) {
+      message = '';
+    }
+    log('Flow', `HARD STOP: booking slots 404 for ${projectId} (backend: "${message}").`);
+    return false;
+  }
+
+  const slotsData = responseData(slotsRes);
+  const availableSlots = (slotsData && slotsData.availableSlots) || [];
+  if (!availableSlots.length) {
+    log('Flow', `HARD STOP: no available booking slots returned for project ${projectId} — check availability-config.`);
+    return false;
+  }
+
+  const slotStart = availableSlots[0].startAt;
+  log('Flow', `Booking earliest available slot for ${projectId}: ${slotStart} (attempt ${attempt}/${maxAttempts})`);
+  const bookRes = postJsonWithHeaders(
+    routes.candidateBooking(projectId),
+    { slotStart },
+    candidateToken,
+    'Book Assessment Slot',
+    candidateHeaders
+  );
+  logStep('Book Assessment Slot', bookRes);
+  check(bookRes, { 'book assessment slot: status 2xx': (r) => r.status >= 200 && r.status < 300 });
+
+  if (bookRes.status >= 200 && bookRes.status < 300) {
+    return true;
+  }
+
+  let message = '';
+  try {
+    message = (bookRes.json() || {}).message || '';
+  } catch (e) {
+    message = '';
+  }
+
+  const isStaleWindowRace = bookRes.status === 400 && /outside the availability window/i.test(message);
+  if (isStaleWindowRace && attempt < maxAttempts) {
+    log('Flow', `Book Assessment Slot 400 (stale slot — availability floor moved between GET and POST). Re-fetching and retrying once.`);
+    return bookEarliestSlot(candidateToken, projectId, candidateHeaders, attempt + 1);
+  }
+
+  log('Flow', `HARD STOP: failed to book a slot for ${projectId} (status ${bookRes.status}, message: "${message}").`);
+  return false;
+}
+
+function clientSessionId() {
+  const timestamp = Date.now().toString(16).padStart(12, '0');
+  const vu = Number(__VU || 0).toString(16).padStart(4, '0');
+  const iteration = Number(__ITER || 0).toString(16).padStart(4, '0');
+  return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}00-${vu}0-${iteration}0000-000000000000`;
+}
+
+export function submitActivity(candidateToken, candidateId, activity, candidateName = 'Candidate', projectId = HARDCODED_PROJECT_ID) {
   const activityId = activity.id;
   const label = activity.title || activity.type || 'Unknown';
   const stepName = ANUM_API_ENABLED ? 'Submit Activity (Anum evaluation)' : 'Submit Activity';
+  const activityClientSessionId = clientSessionId();
 
   // DEBUG: log values being sent to API
-  log('SubmitActivity', `projectId=${HARDCODED_PROJECT_ID} activityId=${activityId} candidateId=${candidateId} type=${activity.type}`);
+  log('SubmitActivity', `projectId=${projectId} activityId=${activityId} candidateId=${candidateId} type=${activity.type}`);
 
   // ------------------------------------------------------------------
   // Step 1: Start session (endpoint varies by activity type)
