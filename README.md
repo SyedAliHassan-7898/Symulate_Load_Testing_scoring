@@ -1,173 +1,237 @@
 # Symulate k6 Load Testing Suite
 
-Backend REST API load testing for the Symulate AI platform, built with
-[k6](https://k6.io). It exercises the **real end-to-end flow** across all
-three portals (Super Admin, Client Admin, Candidate) directly against the
-API — not the UI — so it measures actual backend performance under load.
+Backend API load testing for the Symulate AI platform, built with [k6](https://k6.io).
+It exercises the end-to-end backend flow across the Super Admin, Client Admin, and Candidate paths.
 
-## Structure
+## What This Suite Runs
 
-```
+The main entry point is `tests/smoke.js`. It chains the flow exactly as the code does today:
+
+1. Super Admin login
+2. Create Client
+3. Create activities
+4. Assign activities to the organization
+5. Client Admin impersonation
+6. Create account / skills setup
+7. Create project and import candidates
+8. Candidate login
+9. Candidate activity completion
+10. Optional project review flow for the hardcoded project
+
+The suite currently uses a hardcoded assessment candidate/project pair for the candidate and review paths. That means the README and scripts should be read as "run against the pre-provisioned assessment data plus the client/project setup created during the test," not as a fresh CSV-import-only flow.
+
+## Repository Layout
+
+```text
 config/
-  environments.js   # base URLs, credentials, SCENARIO / ANUM_API_ENABLED / LOAD_MODE toggles
-  thresholds.js      # pass/fail budgets, global + per-step
-data/
-  candidates.csv      # 10 fixed candidates, used every run for repeatability
-  personas.js           # preferred persona names -> resolved to real personaIds at runtime
-  taskTemplates.js        # payload builders for all 6 activity types (2-step: initial + detail)
-scenarios/             # one file per flow step, each independently runnable
-  login.js               # Super Admin / Client Admin / Candidate login + impersonation
-  clientcreation.js       # Create Client (+ Talent Intelligence toggle)
-  taskcreation.js          # Create Activities, with persona resolution
-  taskassign.js             # Assign activities to the org
-  projectcreation.js         # Client Admin (impersonated): Create Project + CSV candidate import
-  candidateassessment.js      # Candidate: login + sequential session/response activities
+  environments.js   # base URLs, credentials, scenario toggles, hardcoded assessment IDs
+  thresholds.js     # global + per-step pass/fail budgets
+scenarios/
+  login.js          # Super Admin / Client Admin login + impersonation helpers
+  clientcreation.js # Create Client and toggle Talent Intelligence
+  taskcreation.js   # Create activities / tasks
+  taskassign.js     # Assign activities to the org
+  projectcreation.js# Create project and import candidates
+  candidateassessment.js # Candidate login and sequential activity completion
+  projectreview.js  # Client Admin review flow for the hardcoded project
 tests/
-  discover-login.js    # quick credential/API_URL smoke check
-  smoke.js               # THE main entry point — full chained flow, smoke or load mode
+  discover-login.js # fast login/API smoke check
+  smoke.js          # main chained smoke/load entry point
 utils/
-  http.js       # request wrapper: headers, per-step metric tags, byte counters
-  routes.js      # every confirmed real endpoint, with CONFIRM/BEST-EFFORT notes inline
-  data.js         # CSV loader (SharedArray + papaparse)
-  helpers.js       # logging, unique-suffix, report-name helpers
-assets/
-  task-thumbnail.jpg   # sample task banner image, reused from the Playwright suite
-monitoring/             # Grafana + InfluxDB live monitoring stack (see below)
-reports/                # every run's HTML + JSON report lands here (gitignored)
+  http.js           # request wrapper and token helpers
+  routes.js         # endpoint paths
+  helpers.js        # logging and report naming
+reports/            # generated HTML, JSON, and CSV output
+monitoring/         # optional Grafana + InfluxDB stack
 ```
 
 ## Install
 
 ```bash
-npm install                 # installs cross-env only — k6 itself is a separate binary
-# k6 binary: https://k6.io/docs/get-started/installation/
-cp .env.example .env         # then fill in real values
+npm install
 ```
 
-## Running
+You also need the `k6` binary installed separately.
 
-| Command                                                                 | What it does                                                        |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `npm run discover`                                                      | Login-only smoke check — confirms credentials/API_URL work         |
-| `npm run smoke`                                                         | Full flow, 1 VU, 1 iteration, with Anum, all 6 activity types       |
-| `npm run smoke:no-anum`                                                 | Same, Anum submission steps skipped                                 |
-| `npm run smoke:situation`                                               | Same, only Situation activity type assigned to project              |
-| `npm run smoke:situation:no-anum`                                       | Situation-only + no Anum                                            |
-| `npm run load`                                                          | Ramping-VU load test, with Anum, full flow                          |
-| `npm run load:no-anum`                                                  | Ramping-VU load test, without Anum                                  |
-| `npm run load:situation`                                                | Ramping-VU load test, situation-only                                |
-| `npm run load:situation:no-anum`                                        | Ramping-VU load test, situation-only + no Anum                      |
-| `npm run load:all`                                                      | Runs all four load combinations back to back                        |
-| `npm run load:csv`                                                      | Load test + raw per-request metrics CSV (`reports/raw-metrics.csv`) |
-| `npm run load:grafana`                                                  | Load test + live-streams metrics to Grafana (see below)             |
-| `npm run scenario:login` / `:client` / `:task` / `:assign` / `:project` | Run one step in isolation, for debugging                            |
+Create a `.env` file from your own environment values before running the suite.
 
-### Standalone Candidate Assessment (Avoid Rate Limits)
+## Recommended Run Order
 
-To test candidate evaluation directly without creating a client, project, or candidate (which can trigger HTTP 429 rate limit blockages), run the assessment scenario standalone using a pre-existing candidate:
+1. Run the login smoke check first:
 
 ```bash
-k6 run -e CANDIDATE_EMAIL=performer19@yopmail.com -e CANDIDATE_PASSWORD=Test@123 -e CANDIDATE_ORG_ID=dummy scenarios/candidateassessment.js
+npm run discover
 ```
 
-Load shape is configurable via env vars (`.env` or `-e` flags):
-`LOAD_VUS` (default 10), `LOAD_DURATION` (default 2m), `LOAD_RAMP_UP` /
-`LOAD_RAMP_DOWN` (default 30s each).
-
-Example — 25 VUs for 5 minutes, without Anum:
+2. Run the default smoke test:
 
 ```bash
-cross-env LOAD_MODE=load LOAD_VUS=25 LOAD_DURATION=5m ANUM_API_ENABLED=false k6 run tests/smoke.js
+npm run smoke
 ```
 
-## The flow, exactly as chained in `tests/smoke.js`
-
-1. **Super Admin login**
-2. **Create Client** (org) — Talent Intelligence toggled on via
-   `PATCH /organizations/{id}` when `ANUM_API_ENABLED=true`
-3. **Create activities**, with persona resolution where applicable
-   - `SCENARIO=full` (default): all 6 types — Role Play, Interview,
-     Case Exercise, Situation, Board Meeting, Welcome
-   - `SCENARIO=situation-only`: only Situation — the one type with **no**
-     persona field, isolating that no-persona path
-4. **Assign activities to the org**
-5. **Client Admin (via impersonation) creates Project**, imports the
-   **20 candidates** from `data/candidates.csv` with a `0.5s` delay between requests to avoid rate limits
-6. **Each candidate logs in** with email + `CANDIDATE_DEFAULT_PASSWORD`
-7. **Each candidate performs all assigned activities, one by one, sequentially** — never in parallel, mirroring a real candidate session
-
-### WebSocket Transcription (SITUATIONS vs Standard)
-- **Standard Activities (Role Play, Interview, Board Meeting, etc.)**: Stream multiple sequential turns over WebSocket via `'text-line'` events containing the candidate/persona responses.
-- **SITUATIONS Activities (Supply Chain Bottleneck Analysis)**: Send a single `'audio-line'` event containing the situation ID, candidate ID, session details, and a base64-encoded WebM audio payload in the `line` field (loaded from `utils/webmAudio.js`). The connection stays open for up to 5 seconds to wait for the backend's `'transcript-updated'` confirmation before disconnecting.
-
-## Live Grafana Monitoring
-
-The `monitoring/` folder is a self-contained Docker Compose stack:
-**InfluxDB** (k6 writes to it natively — no extension/build of k6 needed)
-
-+ **Grafana**, pre-provisioned with the InfluxDB datasource and a
-  dashboard built for this suite's tagged metrics.
-
-**Setup (one-time):**
+3. Move to load mode once the smoke run is stable:
 
 ```bash
-cd monitoring
-docker compose up -d
+npm run load
 ```
 
-- Grafana: http://localhost:3001 (anonymous viewer access is enabled for
-  convenience — lock this down before using outside a local/dev machine)
-- InfluxDB: http://localhost:8087 (database `k6`, no auth in this dev setup)
+## Available Commands
 
-**Run a load test with live streaming** (from the project root, a separate
-terminal, stack already up):
+| Command | Purpose |
+| --- | --- |
+| `npm run discover` | Login-only smoke check for credentials and API URL |
+| `npm run smoke` | Full flow, 1 VU, 1 iteration |
+| `npm run smoke:no-anum` | Full flow without Talent Intelligence |
+| `npm run smoke:situation` | Smoke flow using `SCENARIO=situation-only` |
+| `npm run smoke:situation:no-anum` | Situation-only smoke flow without Talent Intelligence |
+| `npm run load` | Ramping VU load run with Talent Intelligence enabled |
+| `npm run load:no-anum` | Ramping VU load run without Talent Intelligence |
+| `npm run load:situation` | Ramping VU load run with `SCENARIO=situation-only` |
+| `npm run load:situation:no-anum` | Ramping VU load run with situation-only and no Talent Intelligence |
+| `npm run load:all` | Runs all four load combinations back to back |
+| `npm run load:csv` | Load run that also writes `reports/raw-metrics.csv` |
+| `npm run load:grafana` | Load run streamed to InfluxDB for Grafana |
+| `npm run smoke:grafana` | Smoke run streamed to InfluxDB for Grafana |
+| `npm run scenario:login` | Run only the login scenario |
+| `npm run scenario:client` | Run only the client creation scenario |
+| `npm run scenario:task` | Run only the task creation scenario |
+| `npm run scenario:assign` | Run only the task assignment scenario |
+| `npm run scenario:project` | Run only the project creation scenario |
+| `npm run scenario:project:email` | Run project creation with invitation emails enabled |
+
+## Flow Details
+
+### Smoke and Load Flow
+
+`tests/smoke.js` uses these key environment toggles:
+
+- `LOAD_MODE=smoke|load`
+- `SCENARIO=full|situation-only`
+- `ANUM_API_ENABLED=true|false`
+- `LOAD_VUS`
+- `LOAD_DURATION`
+- `LOAD_RAMP_UP`
+- `LOAD_RAMP_DOWN`
+
+The flow is:
+
+1. Super Admin logs in.
+2. Client is created.
+3. Activities are created.
+4. Activities are assigned to the new org.
+5. Client Admin is impersonated.
+6. Account and skills setup runs.
+7. Project creation runs.
+8. The hardcoded candidate logs in and performs activities sequentially.
+9. If candidate activity completion succeeds, the hardcoded project review flow can run.
+
+### Project Review Flow
+
+`scenarios/projectreview.js` is a standalone Client Admin review flow for the hardcoded project.
+
+You can run it indirectly through the main flow or directly by wiring it into a script if needed for debugging. The review flow uses:
+
+- `PROJECT_REVIEW_PROJECT_ID`
+- `PROJECT_REVIEW_CANDIDATE_ID`
+- `PROJECT_REVIEW_CANDIDATE_LIMIT`
+- `PROJECT_REVIEW_REASON`
+- `PROJECT_REVIEW_SCORE`
+
+## Environment Variables
+
+Common values read from `.env` or `-e` overrides:
+
+- `API_URL`
+- `SUPER_ADMIN_EMAIL`
+- `SUPER_ADMIN_PASSWORD`
+- `CLIENT_ADMIN_EMAIL`
+- `CLIENT_ADMIN_PASSWORD`
+- `CANDIDATE_EMAIL`
+- `CANDIDATE_PASSWORD`
+- `ANUM_API_ENABLED`
+- `SCENARIO`
+- `LOAD_MODE`
+- `LOAD_VUS`
+- `LOAD_DURATION`
+- `LOAD_RAMP_UP`
+- `LOAD_RAMP_DOWN`
+- `SEND_PROJECT_INVITATIONS`
+- `SEND_CLIENT_EMAIL`
+
+The current default API base is:
+
+```text
+https://api.symulate.weuno.co/dev/api
+```
+
+## Examples
+
+Smoke without Talent Intelligence:
 
 ```bash
-npm run load:grafana
-# or: npm run load:grafana:no-anum / load:grafana:situation
+npm run smoke:no-anum
 ```
 
-Open Grafana → **k6 Load Testing** folder → **"Symulate k6 Load Test - Live
-Monitoring"**. It auto-refreshes every 5s while the test runs and shows:
+Situation-only load run:
 
-- Virtual Users (VUs) over time
-- Requests/sec
-- Response time p95/p99 (overall)
-- Error rate (%)
-- **p95 response time broken down by step** (Login, Create Client, Create
-  Task, Submit Activity, etc. — same step names used in the HTML report
-  and in `config/thresholds.js -> STEP_THRESHOLDS`)
-- Checks pass rate (%)
-- Data received/sent by step
-- Run totals (requests, failures, iterations)
+```bash
+npm run load:situation
+```
 
-Stop the stack when done: `docker compose down` (add `-v` to also wipe
-stored metrics: `docker compose down -v`, or `npm run monitoring:reset`).
+Custom load shape:
+
+```bash
+cross-env LOAD_MODE=load LOAD_VUS=25 LOAD_DURATION=5m k6 run tests/smoke.js
+```
+
+Direct login discovery:
+
+```bash
+k6 run tests/discover-login.js
+```
 
 ## Reports
 
-Every `tests/smoke.js` run (smoke or load) writes, with no extra setup:
+Every `tests/smoke.js` run writes files into `reports/`:
 
-- `reports/report-<mode>-<scenario>-<anum-tag>-<timestamp>.html` — open
-  directly in a browser, works fully offline, full per-step breakdown
-- `reports/report-<mode>-<scenario>-<anum-tag>-<timestamp>.json` — full
-  machine-readable k6 summary
-- `reports/raw-metrics.csv` — only with `npm run load:csv`, every raw
-  per-request sample (for building your own with/without-Anum comparison
-  charts)
+- HTML report
+- JSON summary
+- CSV summaries for request-level stats and checks
 
-Comparing **with vs without Anum**: run `npm run load` then
-`npm run load:no-anum` and open both HTML reports side by side — request
-names are tagged consistently (`Create Client`, `Submit Activity` vs
-`Submit Activity (Anum evaluation)`, etc.) so the per-step breakdown lines
-up directly. The same comparison is live in Grafana if both runs use
-`npm run load:grafana` / `load:grafana:no-anum` — use the time picker to
-overlay or step between the two runs' time windows.
+The filenames are tagged with mode, scenario, and Anum state so runs do not overwrite each other.
+
+## Live Monitoring
+
+The `monitoring/` folder contains a Docker Compose stack for Grafana and InfluxDB.
+
+Start it with:
+
+```bash
+npm run monitoring:up
+```
+
+Stop it with:
+
+```bash
+npm run monitoring:down
+```
+
+Reset stored metrics with:
+
+```bash
+npm run monitoring:reset
+```
+
+Then run one of the `load:grafana` or `smoke:grafana` commands to stream metrics into InfluxDB.
 
 ## Thresholds
 
-Global (`config/thresholds.js -> DEFAULT_THRESHOLDS`): < 1% failed
-requests, p95 < 2000ms, p99 < 3500ms, > 99% checks passing. Per-step
-budgets (`STEP_THRESHOLDS`) are looser for heavier steps (task creation,
-Anum-backed submission). Tune both once a couple of real runs establish
-your actual baseline.
+Global and per-step thresholds live in `config/thresholds.js`.
+
+If you change the flow shape, update the thresholds alongside it so the report stays meaningful.
+
+## Notes
+
+- The runner in `scripts/run.js` loads `.env` and forwards values to k6 as `-e` flags.
+- The suite is tuned around the hardcoded assessment candidate/project data in `config/environments.js`.
+- If you are adjusting credentials, candidate IDs, or review IDs, update the README and `config/environments.js` together so the docs stay accurate.
