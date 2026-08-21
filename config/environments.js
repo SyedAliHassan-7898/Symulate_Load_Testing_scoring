@@ -50,6 +50,14 @@ export const NUM_CANDIDATES = Number(__ENV.NUM_CANDIDATES || 1);
 export const SEND_PROJECT_INVITATIONS = String(__ENV.SEND_PROJECT_INVITATIONS || 'false').toLowerCase() !== 'false';
 export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLowerCase() !== 'false';
 
+// Hardcoded assessment access values used for the booked candidate flow.
+// These are intentionally fixed so the smoke/demo path always points to
+// the same candidate/project/booking trio unless you change them here.
+export const HARDCODED_ASSESSMENT_CANDIDATE_ID = '97be0318-a525-4240-a282-fc5b78357542';
+export const HARDCODED_ASSESSMENT_PROJECT_ID = 'beda7645-bd14-4142-9b26-65023db61cd8';
+export const HARDCODED_ASSESSMENT_BOOKING_ID = 'b33c5300-da05-437c-8e6d-a71bf5d2f7a8';
+export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-20T11:20:00.000Z';  
+
 // CONFIRMED gap (still open): POST /candidate/upload-candidates only
 // returns { totalRows, queued, errors } — no per-candidate credentials or
 // tokens. There is no candidate-impersonation endpoint in the spec either
@@ -68,16 +76,16 @@ export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
   {
-    email: __ENV.CANDIDATE_EMAIL || 'candidate001@yopmail.com',
+    email: __ENV.CANDIDATE_EMAIL || 'candidate004@yopmail.com',
     password: __ENV.CANDIDATE_PASSWORD || 'Test@123',
-    candidateId: '84ffba92-1a8e-4dc4-b3c1-4ee04592c738'
+    candidateId: HARDCODED_ASSESSMENT_CANDIDATE_ID,
+    projectId: HARDCODED_ASSESSMENT_PROJECT_ID,
+    bookingId: HARDCODED_ASSESSMENT_BOOKING_ID,
+    bookingStartAt: HARDCODED_ASSESSMENT_BOOKING_START_AT
   }
   // Add more candidates for load testing:
   // { email: 'performer2@yopmail.com', password: 'Test@123', candidateId: '0873bf73-1522-40d9-9bf9-1e354d2db5f9' },
   // { email: 'performer3@yopmail.com', password: 'Test@123', candidateId: 'dabd71cf-74f0-4796-b88e-b80708e5ee37' },
 ];
 
-// Hardcoded project ID for candidate assessment (pre-existing project with
-// activities already assigned to the hardcoded candidates above).
-export const HARDCODED_PROJECT_ID =
-  __ENV.HARDCODED_PROJECT_ID || 'beda7645-bd14-4142-9b26-65023db61cd8';
+export const HARDCODED_PROJECT_ID = HARDCODED_ASSESSMENT_PROJECT_ID;
