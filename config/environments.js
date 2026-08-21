@@ -53,10 +53,10 @@ export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLow
 // Hardcoded assessment access values used for the booked candidate flow.
 // These are intentionally fixed so the smoke/demo path always points to
 // the same candidate/project/booking trio unless you change them here.
-export const HARDCODED_ASSESSMENT_CANDIDATE_ID = '97be0318-a525-4240-a282-fc5b78357542';
-export const HARDCODED_ASSESSMENT_PROJECT_ID = 'beda7645-bd14-4142-9b26-65023db61cd8';
-export const HARDCODED_ASSESSMENT_BOOKING_ID = 'b33c5300-da05-437c-8e6d-a71bf5d2f7a8';
-export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-20T11:20:00.000Z';  
+export const HARDCODED_ASSESSMENT_CANDIDATE_ID = 'ee3e0a22-9008-42f4-9e3a-bb23402c5932';
+export const HARDCODED_ASSESSMENT_PROJECT_ID = 'a9a20e49-4c94-4eb7-bef0-7ef3a66ad5d0';
+export const HARDCODED_ASSESSMENT_BOOKING_ID = '80208a28-31f1-4c7e-b5a4-3ab3544e12fc';
+export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-21T13:20:00.000Z';
 
 // CONFIRMED gap (still open): POST /candidate/upload-candidates only
 // returns { totalRows, queued, errors } — no per-candidate credentials or
@@ -76,7 +76,7 @@ export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
   {
-    email: __ENV.CANDIDATE_EMAIL || 'candidate004@yopmail.com',
+    email: __ENV.CANDIDATE_EMAIL || 'micky@yopmail.com',
     password: __ENV.CANDIDATE_PASSWORD || 'Test@123',
     candidateId: HARDCODED_ASSESSMENT_CANDIDATE_ID,
     projectId: HARDCODED_ASSESSMENT_PROJECT_ID,

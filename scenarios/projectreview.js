@@ -16,6 +16,8 @@ import { superAdminLogin, clientAdminLogin, impersonateClientAdmin } from './log
 
 const REVIEW_REASON = __ENV.PROJECT_REVIEW_REASON || 'good';
 const REVIEW_SCORE_OVERRIDE = __ENV.PROJECT_REVIEW_SCORE ? Number(__ENV.PROJECT_REVIEW_SCORE) : null;
+const REVIEW_SCORE_MAX_ATTEMPTS = Number(__ENV.PROJECT_REVIEW_MAX_ATTEMPTS || 8);
+const REVIEW_SCORE_RETRY_DELAY_SECONDS = Number(__ENV.PROJECT_REVIEW_RETRY_DELAY_SECONDS || 2);
 const DEFAULT_REVIEW_CLIENT_ADMIN_USER_ID = 'd782f765-9d74-43c5-a268-e99e8246ac55';
 const CLIENT_ADMIN_HEADERS = {
   'x-base-origin': 'client-admin',
@@ -195,11 +197,7 @@ function safeDataObject(res) {
 
 function reviewActivity(token, projectId, candidateId, activity, activityIndex) {
   const activityId = activity.activityId;
-  const detailRes = reviewGet(
-    routes.scoringProjectCandidateActivity(projectId, candidateId, activityId),
-    token,
-    'Project Review - Get Activity Score'
-  );
+  const detailRes = waitForReviewableActivity(token, projectId, candidateId, activityId, activity.type, activityIndex);
   logStep(`Project Review - Get Activity Score (${activityId})`, detailRes);
 
   if (detailRes.status === 404) {
@@ -245,6 +243,49 @@ function reviewActivity(token, projectId, candidateId, activity, activityIndex) 
   });
 
   return { skipped: reviewedItems === 0, reviewedItems, reason: reviewedItems === 0 ? 'save_failed' : null };
+}
+
+function waitForReviewableActivity(token, projectId, candidateId, activityId, activityType, activityIndex) {
+  let lastRes = null;
+
+  for (let attempt = 1; attempt <= REVIEW_SCORE_MAX_ATTEMPTS; attempt += 1) {
+    lastRes = reviewGet(
+      routes.scoringProjectCandidateActivity(projectId, candidateId, activityId),
+      token,
+      'Project Review - Get Activity Score'
+    );
+
+    if (lastRes.status === 404) {
+      return lastRes;
+    }
+
+    if (lastRes.status >= 200 && lastRes.status < 300) {
+      const missingReason = getMissingReviewDataReason(lastRes);
+      if (!missingReason) {
+        return lastRes;
+      }
+
+      if (attempt < REVIEW_SCORE_MAX_ATTEMPTS) {
+        log(
+          'Project Review',
+          `Waiting for review data activityId=${activityId} attempt=${attempt}/${REVIEW_SCORE_MAX_ATTEMPTS} reason=${missingReason}`
+        );
+        sleep(REVIEW_SCORE_RETRY_DELAY_SECONDS);
+        continue;
+      }
+    }
+
+    break;
+  }
+
+  if (lastRes && lastRes.status >= 200 && lastRes.status < 300) {
+    log(
+      'Project Review',
+      `Review data still incomplete for activityId=${activityId} type=${activityType} index=${activityIndex} after ${REVIEW_SCORE_MAX_ATTEMPTS} attempts`
+    );
+  }
+
+  return lastRes;
 }
 
 function resolveReviewTargetsFromProject(res, configuredCandidates) {
