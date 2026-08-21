@@ -115,10 +115,32 @@ export function getActivitiesFromProject(adminToken, candidateId) {
   }
 }
 
+export function getHardcodedProjectCandidateId(adminToken, email, projectId = HARDCODED_PROJECT_ID) {
+  const res = getJson(routes.projectCandidates(projectId), adminToken, 'Get Hardcoded Project Candidates');
+  logStep('Get Hardcoded Project Candidates', res);
+
+  try {
+    const body = res.json();
+    const data = body && body.data;
+    const candidates =
+      (data && (data.candidates || data.projectCandidates || data.items || data.rows || data.results || data.data)) ||
+      body.candidates || body.projectCandidates || body.items || body.rows || body.results || [];
+    const target = (Array.isArray(candidates) ? candidates : []).find((item) => {
+      const candidate = item && (item.candidate || item.user || item.profile || item);
+      return candidate && String(candidate.email || '').toLowerCase() === String(email || '').toLowerCase();
+    });
+    const candidate = target && (target.candidate || target.user || target.profile || target);
+    const resolvedId = target && (target.candidateId || target.userId || (candidate && (candidate.candidateId || candidate.id))) || null;
+    return resolvedId;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Accept agreement on behalf of candidate (mirrors clicking "I Agree" in the UI)
-export function acceptCandidateAgreement(candidateToken, candidateId) {
+export function acceptCandidateAgreement(candidateToken, candidateId, projectId = HARDCODED_PROJECT_ID) {
   const res = patchJson(
-    routes.acceptAgreement(candidateId, HARDCODED_PROJECT_ID),
+    routes.acceptAgreement(candidateId, projectId),
     { isAgreementPolicyAccepted: true },
     candidateToken,
     'Accept Candidate Agreement'

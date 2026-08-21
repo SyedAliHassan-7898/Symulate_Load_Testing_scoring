@@ -231,6 +231,23 @@ export function createAndAssignUploadedCandidates(clientToken, projectId, organi
   return candidateIds;
 }
 
+export function createProjectCandidate(clientToken, projectId, organizationId, candidate, stepName = 'Create Project Candidate') {
+  const payload = {
+    name: candidate.name,
+    email: candidate.email,
+    organizationId,
+    force: true
+  };
+  const res = postJson(routes.createCandidateForProject(projectId), payload, clientToken, stepName);
+  logStep(`${stepName} (${candidate.email})`, res);
+  const candidateId = extractCandidateId(res);
+  check(res, {
+    [`${stepName}: status 2xx`]: (r) => r.status >= 200 && r.status < 300,
+    [`${stepName}: id returned`]: () => !!candidateId
+  });
+  return candidateId;
+}
+
 export function getCandidatesByProject(clientToken, projectId) {
   const res = getJson(routes.projectCandidates(projectId), clientToken, 'Get Candidates by Project');
   logStep('Get Candidates by Project', res);
