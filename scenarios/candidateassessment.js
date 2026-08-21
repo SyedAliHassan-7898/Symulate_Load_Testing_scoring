@@ -1,4 +1,4 @@
-// scenarios/candidateassessment.js
+﻿// scenarios/candidateassessment.js
 // Steps 6 & 7: Candidate logs in and performs each assigned activity,
 // one by one, sequentially.
 //

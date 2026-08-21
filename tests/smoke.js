@@ -1,4 +1,4 @@
-// tests/smoke.js
+﻿// tests/smoke.js
 //
 // The full end-to-end flow, chained exactly as specified:
 //   1. Super Admin login

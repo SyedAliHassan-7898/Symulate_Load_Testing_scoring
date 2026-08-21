@@ -152,4 +152,4 @@ function safeField(res, key) {
 // Standalone-runnable: `k6 run scenarios/login.js`
 export default function () {
   superAdminLogin();
-}
+} 
