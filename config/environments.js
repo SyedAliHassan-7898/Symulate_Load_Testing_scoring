@@ -35,7 +35,7 @@ export const CREDENTIALS = {
 // `enableTalentIntelligence` field on the Organization, set via 
 // PATCH /organizations/{id} (UpdateOrganizationDto). See
 // scenarios/clientcreation.js.
-export const ANUM_API_ENABLED = String(__ENV.ANUM_API_ENABLED || 'true').toLowerCase() !== 'true';
+export const ANUM_API_ENABLED = String(__ENV.ANUM_API_ENABLED || 'true').toLowerCase() === 'true';
 
 // Which flow to execute:
 // full            -> all 6 activity types, persona selection on every type that needs one
@@ -47,16 +47,16 @@ export const SCENARIO = __ENV.SCENARIO || 'full';
 export const LOAD_MODE = __ENV.LOAD_MODE || 'smoke';
 
 export const NUM_CANDIDATES = Number(__ENV.NUM_CANDIDATES || 1);
-export const SEND_PROJECT_INVITATIONS = String(__ENV.SEND_PROJECT_INVITATIONS || 'false').toLowerCase() !== 'false';
+export const SEND_PROJECT_INVITATIONS = String(__ENV.SEND_PROJECT_INVITATIONS || 'false').toLowerCase() !== 'true';
 export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLowerCase() !== 'false';
 
 // Hardcoded assessment access values used for the booked candidate flow.
 // These are intentionally fixed so the smoke/demo path always points to
 // the same candidate/project/booking trio unless you change them here.
-export const HARDCODED_ASSESSMENT_CANDIDATE_ID = 'ee3e0a22-9008-42f4-9e3a-bb23402c5932';
+export const HARDCODED_ASSESSMENT_CANDIDATE_ID = '5826c117-2cd7-4b48-993e-bb59aaab6e50';
 export const HARDCODED_ASSESSMENT_PROJECT_ID = 'a9a20e49-4c94-4eb7-bef0-7ef3a66ad5d0';
-export const HARDCODED_ASSESSMENT_BOOKING_ID = '80208a28-31f1-4c7e-b5a4-3ab3544e12fc';
-export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-21T13:20:00.000Z';
+export const HARDCODED_ASSESSMENT_BOOKING_ID = '-3c15460e-ef7c-4dc3-a6cc-c03973a6c8a8';
+export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-24T06:30:00.000Z';
 
 // CONFIRMED gap (still open): POST /candidate/upload-candidates only
 // returns { totalRows, queued, errors } — no per-candidate credentials or
@@ -71,12 +71,12 @@ export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-21T13:20:00.000Z';
 export const CANDIDATE_DEFAULT_PASSWORD = __ENV.CANDIDATE_DEFAULT_PASSWORD || 'Test@123';
 export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD || 'Test@123';
 
-// Hardcoded candidates with known working credentials for assessment.
+// Hardcoded candidatecos with known working credentials for assessment.
 // Used instead of CSV-imported candidates (whose passwords are unknown).
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
   {
-    email: __ENV.CANDIDATE_EMAIL || 'micky@yopmail.com',
+    email: __ENV.CANDIDATE_EMAIL || 'scriptcan11@yopmail.com',
     password: __ENV.CANDIDATE_PASSWORD || 'Test@123',
     candidateId: HARDCODED_ASSESSMENT_CANDIDATE_ID,
     projectId: HARDCODED_ASSESSMENT_PROJECT_ID,
