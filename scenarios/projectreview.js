@@ -16,8 +16,6 @@ import { superAdminLogin, clientAdminLogin, impersonateClientAdmin } from './log
 
 const REVIEW_REASON = __ENV.PROJECT_REVIEW_REASON || 'good';
 const REVIEW_SCORE_OVERRIDE = __ENV.PROJECT_REVIEW_SCORE ? Number(__ENV.PROJECT_REVIEW_SCORE) : null;
-const REVIEW_SCORE_MAX_ATTEMPTS = Number(__ENV.PROJECT_REVIEW_MAX_ATTEMPTS || 8);
-const REVIEW_SCORE_RETRY_DELAY_SECONDS = Number(__ENV.PROJECT_REVIEW_RETRY_DELAY_SECONDS || 2);
 const DEFAULT_REVIEW_CLIENT_ADMIN_USER_ID = 'd782f765-9d74-43c5-a268-e99e8246ac55';
 const CLIENT_ADMIN_HEADERS = {
   'x-base-origin': 'client-admin',
@@ -197,7 +195,11 @@ function safeDataObject(res) {
 
 function reviewActivity(token, projectId, candidateId, activity, activityIndex) {
   const activityId = activity.activityId;
-  const detailRes = waitForReviewableActivity(token, projectId, candidateId, activityId, activity.type, activityIndex);
+  const detailRes = reviewGet(
+    routes.scoringProjectCandidateActivity(projectId, candidateId, activityId),
+    token,
+    'Project Review - Get Activity Score'
+  );
   logStep(`Project Review - Get Activity Score (${activityId})`, detailRes);
 
   if (detailRes.status === 404) {
@@ -223,6 +225,8 @@ function reviewActivity(token, projectId, candidateId, activity, activityIndex) 
     return { skipped: true, reviewedItems: 0, reason: 'no_review_items' };
   }
 
+  validateCandidateResponsesAgainstTranscript(detailRes, activityId, candidateId);
+
   let reviewedItems = 0;
   reviewItems.forEach((item) => {
     const res = reviewPatch(
@@ -245,65 +249,38 @@ function reviewActivity(token, projectId, candidateId, activity, activityIndex) 
   return { skipped: reviewedItems === 0, reviewedItems, reason: reviewedItems === 0 ? 'save_failed' : null };
 }
 
-function waitForReviewableActivity(token, projectId, candidateId, activityId, activityType, activityIndex) {
-  let lastRes = null;
-
-  for (let attempt = 1; attempt <= REVIEW_SCORE_MAX_ATTEMPTS; attempt += 1) {
-    lastRes = reviewGet(
-      routes.scoringProjectCandidateActivity(projectId, candidateId, activityId),
-      token,
-      'Project Review - Get Activity Score'
-    );
-
-    if (lastRes.status === 404) {
-      return lastRes;
-    }
-
-    if (lastRes.status >= 200 && lastRes.status < 300) {
-      const missingReason = getMissingReviewDataReason(lastRes);
-      if (!missingReason) {
-        return lastRes;
-      }
-
-      if (attempt < REVIEW_SCORE_MAX_ATTEMPTS) {
-        log(
-          'Project Review',
-          `Waiting for review data activityId=${activityId} attempt=${attempt}/${REVIEW_SCORE_MAX_ATTEMPTS} reason=${missingReason}`
-        );
-        sleep(REVIEW_SCORE_RETRY_DELAY_SECONDS);
-        continue;
-      }
-    }
-
-    break;
-  }
-
-  if (lastRes && lastRes.status >= 200 && lastRes.status < 300) {
-    log(
-      'Project Review',
-      `Review data still incomplete for activityId=${activityId} type=${activityType} index=${activityIndex} after ${REVIEW_SCORE_MAX_ATTEMPTS} attempts`
-    );
-  }
-
-  return lastRes;
-}
-
 function resolveReviewTargetsFromProject(res, configuredCandidates) {
   const project = safeDataObject(res);
   if (!project) return [];
 
+  // Priority for who gets reviewed:
+  //   1. PROJECT_REVIEW_CANDIDATE_ID / REVIEW_CANDIDATE_ID — explicit single-
+  //      candidate override, when you deliberately want just one.
+  //   2. The project's real candidates, as returned by the API — this is what
+  //      "review every candidate assigned to the project" means, and must
+  //      win over the hardcoded config; otherwise the hardcoded single
+  //      candidate always wins (it's never empty) and every other assigned
+  //      candidate is silently skipped regardless of any limit setting.
+  //   3. HARDCODED_CANDIDATES (config) — last-resort fallback only if the API
+  //      genuinely returned no candidates for this project.
   const explicitCandidateId = __ENV.PROJECT_REVIEW_CANDIDATE_ID || __ENV.REVIEW_CANDIDATE_ID;
-  const wantedIds = explicitCandidateId
-    ? [explicitCandidateId]
-    : configuredCandidates.map((candidate) => candidate.candidateId).filter(Boolean);
-
   const projectCandidates = project.candidates || [];
-  const candidateIds = wantedIds.length
-    ? wantedIds
-    : projectCandidates
-        .map((row) => (row.candidate && row.candidate.id) || row.candidateId || row.id)
-        .filter(Boolean);
+  const projectCandidateIds = projectCandidates
+    .map((row) => (row.candidate && row.candidate.id) || row.candidateId || row.id)
+    .filter(Boolean);
+  const configuredCandidateIds = configuredCandidates.map((candidate) => candidate.candidateId).filter(Boolean);
 
+  const candidateIds = explicitCandidateId
+    ? [explicitCandidateId]
+    : projectCandidateIds.length
+      ? projectCandidateIds
+      : configuredCandidateIds;
+
+  // WELCOME activities are never reviewable — the backend does not score
+  // or track them as part of a project stage's review, so requesting a
+  // score for one always 404s ("Activity not found in project"). Excluding
+  // them here means reviewActivity() is never called for them at all,
+  // instead of calling it and handling the resulting 404 after the fact.
   const stageRows = (project.stages || []).map((stage) => ({
     stageId: stage.id || stage.stageId,
     stageName: stage.name || stage.stageName,
@@ -313,10 +290,17 @@ function resolveReviewTargetsFromProject(res, configuredCandidates) {
         title: (row.activity && row.activity.title) || row.title,
         type: (row.activity && row.activity.type) || row.type
       }))
-      .filter((activity) => activity.activityId)
+      .filter((activity) => activity.activityId && activity.type !== 'WELCOME')
   })).filter((stage) => stage.stageId && stage.activities.length > 0);
 
-  return candidateIds.slice(0, Number(__ENV.PROJECT_REVIEW_CANDIDATE_LIMIT || 1)).map((candidateId) => ({
+  // No cap by default — validate/review every candidate assigned to the
+  // project. Set PROJECT_REVIEW_CANDIDATE_LIMIT explicitly to restrict to a
+  // smaller batch (e.g. for a quick smoke run).
+  const candidateLimit = __ENV.PROJECT_REVIEW_CANDIDATE_LIMIT
+    ? Number(__ENV.PROJECT_REVIEW_CANDIDATE_LIMIT)
+    : candidateIds.length;
+
+  return candidateIds.slice(0, candidateLimit).map((candidateId) => ({
     candidateId,
     stages: stageRows
   }));
@@ -401,6 +385,14 @@ function extractReviewItems(res, fallbackStageCandidateId, fallbackActivityId, a
           subSkillId,
           reviewerScore: score,
           reviewerScoreReason: reviewReason(score, skill.skillName, subSkill.subSkillName)
+          // NOTE: candidateResponse/evidenceRationale intentionally NOT included
+          // here — this object is sent verbatim as the PATCH body to
+          // reviewProjectCandidate, and the backend DTO rejects unknown
+          // properties ("property candidateResponse should not exist"). The
+          // verbatim-transcript evidence check reads those fields straight off
+          // the raw Get Activity Score response instead — see
+          // validateCandidateResponsesAgainstTranscript() below — so nothing
+          // is lost, it's just kept out of what gets submitted back to the API.
         });
       });
     });
@@ -465,6 +457,77 @@ function explainMissingReviewItems(res) {
   } catch (e) {
     return 'activity score response could not be parsed';
   }
+}
+
+// Normalizes text for comparison: lowercase, strip punctuation, collapse
+// whitespace. This lets a verbatim-quote check tolerate cosmetic differences
+// (casing, stray punctuation, double spaces) without tolerating an actually
+// different or fabricated quote.
+function normalizeQuoteText(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// activity.transcript is the same { role, content, name, interrupted } shape
+// confirmed via the real HAR capture and mirrored in utils/socketConversation.js
+// / data/conversationScripts.js. role === 'user' is the candidate's own lines.
+function extractCandidateTranscriptText(res) {
+  try {
+    const body = res.json();
+    const activity = body && body.data && body.data.activity;
+    const lines = (activity && activity.transcript) || [];
+    return normalizeQuoteText(
+      lines
+        .filter((line) => line && line.role === 'user')
+        .map((line) => line.content || '')
+        .join(' ')
+    );
+  } catch (e) {
+    return '';
+  }
+}
+
+// Validates that every "Candidate response" quoted in the review evidence is
+// an actual, word-for-word excerpt of what that candidate said — not a
+// paraphrase or a hallucinated summary. Runs for every candidate the review
+// flow processes (see resolveReviewTargetsFromProject — no longer capped to
+// a single hardcoded candidate unless PROJECT_REVIEW_CANDIDATE_LIMIT is set).
+function validateCandidateResponsesAgainstTranscript(detailRes, activityId, candidateId) {
+  let activity;
+  try {
+    const body = detailRes.json();
+    activity = body && body.data && body.data.activity;
+  } catch (e) {
+    return;
+  }
+  if (!activity) return;
+
+  const skills = activity.skills || [];
+  const candidateTranscriptText = extractCandidateTranscriptText(detailRes);
+
+  skills.forEach((skill) => {
+    (skill.subSkills || []).forEach((subSkill) => {
+      const candidateResponse = subSkill.candidateResponse;
+      if (!candidateResponse) return; // nothing to validate for this sub-skill
+
+      const normalizedResponse = normalizeQuoteText(candidateResponse);
+      const matchesTranscript = !!normalizedResponse && candidateTranscriptText.includes(normalizedResponse);
+
+      check(null, {
+        [`project review evidence: candidate response is verbatim from transcript (${activityId})`]: () => matchesTranscript
+      });
+
+      if (!matchesTranscript) {
+        log(
+          'Project Review',
+          `WARN activityId=${activityId} candidateId=${candidateId} skill=${skill.skillName || skill.skillId} subSkill=${subSkill.subSkillName || subSkill.subSkillId}: candidate response evidence does not match the transcript word-for-word (possible paraphrase/hallucination)`
+        );
+      }
+    });
+  });
 }
 
 function logTranscriptWarning(res, activityId) {
