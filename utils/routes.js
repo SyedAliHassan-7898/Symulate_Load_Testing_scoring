@@ -24,6 +24,7 @@ export const routes = {
   // --- Auth -----------------------------------------------------------
   login: () => `${API_URL}/auth/login`, // CONFIRMED: Super Admin + Client Admin, body { email, password }
   candidateLogin: () => `${API_URL}/auth/candidate/login`, // CONFIRMED: same LoginDto (email/password) — NOT an access-token endpoint
+  candidatePortalTokens: () => `${API_URL}/auth/candidate/portal-tokens`, // CONFIRMED (booking-flow-api-sequence.json + real HAR capture): the REAL candidate session type — accepts either { portalToken } from the invite link, or { candidateId, projectId } directly. sub === candidateId in the resulting JWT, unlike candidateLogin above. Booking/entry-check ONLY work against a session minted here.
   impersonateUser: () => `${API_URL}/auth/impersonate-user`, // CONFIRMED path/body { userId }; used to get a Client Admin session without a real password
   verifyImpersonateUser: () => `${API_URL}/auth/verify-impersonate-user`, // CONFIRMED path, body { token } — redeems the impersonation token from above
 
@@ -96,6 +97,11 @@ export const routes = {
   createProject: (orgId) => `${API_URL}/project/create-project/${orgId}`, // CONFIRMED, body { title, description }
   projectById: (id) => `${API_URL}/project/get-project-by-id/${id}`, // CONFIRMED
   projectAvailabilityConfig: (projectId) => `${API_URL}/projects/${projectId}/availability-config`, // CONFIRMED via project creation HAR
+  candidateMyBooking: (projectId) => `${API_URL}/projects/${projectId}/bookings/my-booking`, // CONFIRMED via candidate booking HAR
+  candidateBookingSlots: (projectId) => `${API_URL}/projects/${projectId}/bookings/slots`, // CONFIRMED via candidate booking HAR
+  candidateBooking: (projectId) => `${API_URL}/projects/${projectId}/bookings`, // CONFIRMED, body { slotStart }
+  candidateBookingEntryCheck: (projectId, currentTime) =>
+    `${API_URL}/projects/${projectId}/bookings/entry-check?currentTime=${encodeURIComponent(currentTime)}`, // CONFIRMED via candidate booking HAR
   allProjects: (page = 1, limit = 10) => `${API_URL}/project/all-projects?page=${page}&limit=${limit}`, // CONFIRMED via project creation flow
   bandsList: (page = 1, limit = 10) => `${API_URL}/band/list?page=${page}&limit=${limit}`, // CONFIRMED via project creation flow
   stages: () => `${API_URL}/stages`, // CONFIRMED via project creation flow

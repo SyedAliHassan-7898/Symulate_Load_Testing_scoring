@@ -1,4 +1,4 @@
-// scenarios/candidateassessment.js
+﻿// scenarios/candidateassessment.js
 // Steps 6 & 7: Candidate logs in and performs each assigned activity,
 // one by one, sequentially.
 //
@@ -34,17 +34,17 @@
 // how it was populated.
 
 import { check, sleep } from 'k6';
-import { getJson, postJson, patchJson, extractId } from '../utils/http.js';
+import { getJson, getJsonWithHeaders, postJson, postJsonWithHeaders, patchJson, extractId } from '../utils/http.js';
 import { log, logStep } from '../utils/helpers.js';
 import { routes } from '../utils/routes.js';
-import { candidateLogin } from './login.js';
+import { candidateLogin, candidatePortalTokenLogin } from './login.js';
 import { runTranscriptConversation } from '../utils/socketConversation.js';
 import { buildConversationTurns, buildSituationTurn } from '../data/conversationScripts.js';
 import { ANUM_API_ENABLED, HARDCODED_PROJECT_ID, API_URL } from '../config/environments.js';
 
-export function getAssignedActivities(candidateToken, candidateId, organizationId) {
+export function getAssignedActivities(candidateToken, candidateId, organizationId, projectId = HARDCODED_PROJECT_ID) {
   const res = getJson(
-    routes.assignedActivities(HARDCODED_PROJECT_ID, organizationId),
+    routes.assignedActivities(projectId, organizationId),
     candidateToken,
     'Get Assigned Activities'
   );
@@ -79,9 +79,9 @@ export function getAssignedActivities(candidateToken, candidateId, organizationI
 }
 
 // Get activities from project details using admin token (fallback when candidate token fails)
-export function getActivitiesFromProject(adminToken, candidateId) {
+export function getActivitiesFromProject(adminToken, candidateId, projectId = HARDCODED_PROJECT_ID) {
   const res = getJson(
-    routes.projectById(HARDCODED_PROJECT_ID),
+    routes.projectById(projectId),
     adminToken,
     'Get Project Details (Activities)'
   );
@@ -115,10 +115,32 @@ export function getActivitiesFromProject(adminToken, candidateId) {
   }
 }
 
+export function getHardcodedProjectCandidateId(adminToken, email, projectId = HARDCODED_PROJECT_ID) {
+  const res = getJson(routes.projectCandidates(projectId), adminToken, 'Get Hardcoded Project Candidates');
+  logStep('Get Hardcoded Project Candidates', res);
+
+  try {
+    const body = res.json();
+    const data = body && body.data;
+    const candidates =
+      (data && (data.candidates || data.projectCandidates || data.items || data.rows || data.results || data.data)) ||
+      body.candidates || body.projectCandidates || body.items || body.rows || body.results || [];
+    const target = (Array.isArray(candidates) ? candidates : []).find((item) => {
+      const candidate = item && (item.candidate || item.user || item.profile || item);
+      return candidate && String(candidate.email || '').toLowerCase() === String(email || '').toLowerCase();
+    });
+    const candidate = target && (target.candidate || target.user || target.profile || target);
+    const resolvedId = target && (target.candidateId || target.userId || (candidate && (candidate.candidateId || candidate.id))) || null;
+    return resolvedId;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Accept agreement on behalf of candidate (mirrors clicking "I Agree" in the UI)
-export function acceptCandidateAgreement(candidateToken, candidateId) {
+export function acceptCandidateAgreement(candidateToken, candidateId, projectId = HARDCODED_PROJECT_ID) {
   const res = patchJson(
-    routes.acceptAgreement(candidateId, HARDCODED_PROJECT_ID),
+    routes.acceptAgreement(candidateId, projectId),
     { isAgreementPolicyAccepted: true },
     candidateToken,
     'Accept Candidate Agreement'
@@ -128,13 +150,196 @@ export function acceptCandidateAgreement(candidateToken, candidateId) {
   return res.status >= 200 && res.status < 300;
 }
 
-export function submitActivity(candidateToken, candidateId, activity, candidateName = 'Candidate') {
+function responseData(res) {
+  try {
+    const body = res.json();
+    return body && body.data ? body.data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function ensureCandidateBooking(candidateToken, projectId) {
+  const candidateOrigin = __ENV.CANDIDATE_URL || 'https://symulate-ai-dev.weuno.co';
+  const candidateHeaders = { Origin: candidateOrigin, Referer: `${candidateOrigin}/` };
+
+  const bookingRes = getJsonWithHeaders(routes.candidateMyBooking(projectId), candidateToken, 'Get Candidate Booking', candidateHeaders);
+  logStep('Get Candidate Booking', bookingRes);
+
+  // A 404 here has two very different causes and they must NOT be treated
+  // the same way:
+  //  - "Candidate is not assigned to this project" -> resolveAssignment()
+  //    failed on the backend. This is a HARD STOP. No amount of retrying,
+  //    booking, or polling entry-check will ever fix it — canEnter/
+  //    entry-check will just return NO_ACTIVE_BOOKING forever because there
+  //    is nothing to attach a booking to. Re-run the assignment (manually,
+  //    or via bulk-assign) before re-running this script.
+  //  - Any other 404 shape -> genuinely "no booking configured yet", which
+  //    is fine to proceed past by creating one below.
+  if (bookingRes.status === 404) {
+    let message = '';
+    try {
+      message = (bookingRes.json() || {}).message || '';
+    } catch (e) {
+      message = '';
+    }
+    if (/not assigned to this project/i.test(message)) {
+      log(
+        'Flow',
+        `HARD STOP: candidate is not assigned to project ${projectId} (backend: "${message}"). ` +
+          'This is a data/assignment problem, not something a booking call or entry-check retry can fix — ' +
+          're-assign this candidate to the project before re-running.'
+      );
+      return false;
+    }
+  }
+
+  check(bookingRes, {
+    'get candidate booking: status 2xx or no booking configured': (r) => (r.status >= 200 && r.status < 300) || r.status === 404
+  });
+
+  let booking = responseData(bookingRes);
+  if (booking && booking.booking) booking = booking.booking;
+
+  if (!booking || !booking.id || booking.status !== 'BOOKED') {
+    const bookedOk = bookEarliestSlot(candidateToken, projectId, candidateHeaders);
+    if (!bookedOk) return false;
+  }
+
+  // Gate on entry-check the same way the real candidate portal does —
+  // canEnter must be true before starting a session. Reasons fall into
+  // three buckets, and each must be handled differently:
+  //  - NOT_YET_TIME: genuinely transient — the booking exists but the
+  //    window hasn't opened. Safe to poll, bounded by maxWaitMs.
+  //  - NO_ACTIVE_BOOKING: if we just booked (above) and entry-check still
+  //    can't see it, that's either replication lag (worth a SHORT bounded
+  //    retry) or a real problem (booking silently failed server-side /
+  //    was never persisted). It must NEVER be retried indefinitely — if
+  //    a booking truly doesn't exist, waiting longer will not create one.
+  //  - anything else: hard stop immediately, no retry.
+  const maxWaitMs = 60000;
+  const pollIntervalMs = 3000;
+  const maxNoActiveBookingRetries = 3;
+  let waited = 0;
+  let noActiveBookingRetries = 0;
+
+  for (;;) {
+    const entryRes = getJsonWithHeaders(
+      routes.candidateBookingEntryCheck(projectId, new Date().toISOString()),
+      candidateToken,
+      'Booking Entry Check',
+      candidateHeaders
+    );
+    logStep('Booking Entry Check', entryRes);
+    const entry = responseData(entryRes) || {};
+
+    if (entry.canEnter) {
+      return true;
+    }
+
+    if (entry.reason === 'NOT_YET_TIME' && waited < maxWaitMs) {
+      log('Flow', `Booking not open yet (${entry.reason}) for ${projectId} — waiting ${pollIntervalMs}ms and re-checking.`);
+      sleep(pollIntervalMs / 1000);
+      waited += pollIntervalMs;
+      continue;
+    }
+
+    if (entry.reason === 'NO_ACTIVE_BOOKING' && noActiveBookingRetries < maxNoActiveBookingRetries) {
+      noActiveBookingRetries++;
+      log(
+        'Flow',
+        `entry-check says NO_ACTIVE_BOOKING (attempt ${noActiveBookingRetries}/${maxNoActiveBookingRetries}) for ${projectId} — ` +
+          'short bounded retry in case of replication lag, NOT an infinite retry.'
+      );
+      sleep(2);
+      continue;
+    }
+
+    log('Flow', `HARD STOP: entry-check denied for ${projectId} — reason: ${entry.reason || 'unknown'} (no further retries).`);
+    return false;
+  }
+}
+
+// Fetches available slots and books the earliest one. Handles the TOCTOU
+// race where the slot offered by GET /booking-slots can fall just behind
+// the backend's live "minimum lead time" floor by the time POST /book
+// lands a few hundred ms later (backend recomputes `now` fresh on each
+// call) — retries once against a freshly-fetched slot before giving up.
+function bookEarliestSlot(candidateToken, projectId, candidateHeaders, attempt = 1) {
+  const maxAttempts = 2;
+
+  const slotsRes = getJsonWithHeaders(routes.candidateBookingSlots(projectId), candidateToken, 'Get Booking Slots', candidateHeaders);
+  logStep('Get Booking Slots', slotsRes);
+  check(slotsRes, {
+    'get booking slots: status 2xx': (r) => r.status >= 200 && r.status < 300
+  });
+
+  if (slotsRes.status === 404) {
+    let message = '';
+    try {
+      message = (slotsRes.json() || {}).message || '';
+    } catch (e) {
+      message = '';
+    }
+    log('Flow', `HARD STOP: booking slots 404 for ${projectId} (backend: "${message}").`);
+    return false;
+  }
+
+  const slotsData = responseData(slotsRes);
+  const availableSlots = (slotsData && slotsData.availableSlots) || [];
+  if (!availableSlots.length) {
+    log('Flow', `HARD STOP: no available booking slots returned for project ${projectId} — check availability-config.`);
+    return false;
+  }
+
+  const slotStart = availableSlots[0].startAt;
+  log('Flow', `Booking earliest available slot for ${projectId}: ${slotStart} (attempt ${attempt}/${maxAttempts})`);
+  const bookRes = postJsonWithHeaders(
+    routes.candidateBooking(projectId),
+    { slotStart },
+    candidateToken,
+    'Book Assessment Slot',
+    candidateHeaders
+  );
+  logStep('Book Assessment Slot', bookRes);
+  check(bookRes, { 'book assessment slot: status 2xx': (r) => r.status >= 200 && r.status < 300 });
+
+  if (bookRes.status >= 200 && bookRes.status < 300) {
+    return true;
+  }
+
+  let message = '';
+  try {
+    message = (bookRes.json() || {}).message || '';
+  } catch (e) {
+    message = '';
+  }
+
+  const isStaleWindowRace = bookRes.status === 400 && /outside the availability window/i.test(message);
+  if (isStaleWindowRace && attempt < maxAttempts) {
+    log('Flow', `Book Assessment Slot 400 (stale slot — availability floor moved between GET and POST). Re-fetching and retrying once.`);
+    return bookEarliestSlot(candidateToken, projectId, candidateHeaders, attempt + 1);
+  }
+
+  log('Flow', `HARD STOP: failed to book a slot for ${projectId} (status ${bookRes.status}, message: "${message}").`);
+  return false;
+}
+
+function clientSessionId() {
+  const timestamp = Date.now().toString(16).padStart(12, '0');
+  const vu = Number(__VU || 0).toString(16).padStart(4, '0');
+  const iteration = Number(__ITER || 0).toString(16).padStart(4, '0');
+  return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}00-${vu}0-${iteration}0000-000000000000`;
+}
+
+export function submitActivity(candidateToken, candidateId, activity, candidateName = 'Candidate', projectId = HARDCODED_PROJECT_ID) {
   const activityId = activity.id;
   const label = activity.title || activity.type || 'Unknown';
   const stepName = ANUM_API_ENABLED ? 'Submit Activity (Anum evaluation)' : 'Submit Activity';
+  const activityClientSessionId = clientSessionId();
 
   // DEBUG: log values being sent to API
-  log('SubmitActivity', `projectId=${HARDCODED_PROJECT_ID} activityId=${activityId} candidateId=${candidateId} type=${activity.type}`);
+  log('SubmitActivity', `projectId=${projectId} activityId=${activityId} candidateId=${candidateId} type=${activity.type}`);
 
   // ------------------------------------------------------------------
   // Step 1: Start session (endpoint varies by activity type)
@@ -146,7 +351,7 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
     if (activity.type === 'BOARD_MEETING') {
       personaId = activity.boardMeetingActivity?.id || '30d457a4-5ef1-41ae-bb58-a144d48c0a00';
       return postJson(
-        routes.startBoardMeetingSession(activityId, personaId, HARDCODED_PROJECT_ID),
+        routes.startBoardMeetingSession(activityId, personaId, projectId),
         {},
         candidateToken,
         stepName
@@ -154,7 +359,12 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
     } else {
       return postJson(
         routes.startSession(),
-        { projectId: HARDCODED_PROJECT_ID, activityId },
+        {
+          projectId,
+          activityId,
+          force: false,
+          clientSessionId: activityClientSessionId
+        },
         candidateToken,
         stepName
       );
@@ -184,6 +394,11 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
   const sessionId = extractId(sessionRes, 'sessionId');
   check(sessionRes, { [`start session (${label}): status 2xx`]: (r) => r.status >= 200 && r.status < 300 });
 
+  if (!sessionId) {
+    log('Flow', `Activity not started for ${label}; completion and transcript submission skipped`);
+    return { status: sessionRes.status, skipped: true, transcriptConfirmed: false, linesAcked: 0 };
+  }
+
   // ------------------------------------------------------------------
   // Step 2: Drive the real transcript-persistence channel (Socket.IO).
   // This is the piece that was missing before — without it, Anum has no
@@ -198,7 +413,7 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
     const seed = (__VU || 0) + (__ITER || 0);
     if (activity.type === 'SITUATIONS') {
       let situationId = null;
-      const detailsUrl = `${API_URL}/activities/${activityId}?projectId=${HARDCODED_PROJECT_ID}&stageId=${activity.stageId}`;
+      const detailsUrl = `${API_URL}/activities/${activityId}?projectId=${projectId}&stageId=${activity.stageId}`;
       const detailsRes = getJson(detailsUrl, candidateToken, 'Get Activity Details');
       logStep(`${stepName} - get details (${label})`, detailsRes);
       if (detailsRes.status === 200) {
@@ -245,8 +460,6 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
     if (!transcriptResult.transcriptConfirmed) {
       log('Flow', `WARNING: no transcript-updated ack for ${label} (${activityId}) — this activity will likely score null`);
     }
-  } else {
-    log('Flow', `WARNING: no sessionId for ${label} — skipping transcript, activity will score null`);
   }
 
   // Small pause mirrors a real candidate moving between tasks after the
@@ -259,7 +472,7 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
   const endedAt = new Date().toISOString();
   const completeRes = patchJson(
     routes.updateActivityStatus(activityId),
-    { status: 'COMPLETED', projectId: HARDCODED_PROJECT_ID, endedAt },
+    { status: 'COMPLETED', projectId, endedAt },
     candidateToken,
     stepName
   );
@@ -279,15 +492,26 @@ export function submitActivity(candidateToken, candidateId, activity, candidateN
 // Activities are passed in (fetched dynamically from project details).
 // organizationId is needed for the assignedActivities endpoint.
 // All activity types are processed: CASE, WELCOME, SITUATIONS, ROLE_PLAY, INTERVIEW, BOARD_MEETING
-export function performAllActivities(email, password, candidateId, activities, organizationId) {
-  log('Flow', `Candidate login: ${email} candidateId=${candidateId} orgId=${organizationId}`);
-  const loginResult = candidateLogin(email, password);
+export function performAllActivities(email, password, candidateId, activities, organizationId, projectCandidateId = null, projectId = HARDCODED_PROJECT_ID) {
+  // Login via portal-tokens, NOT plain email/password. candidateLogin()
+  // (email+password) mints a session whose JWT `sub` does not reliably
+  // match ProjectCandidates.candidateId, so every booking/entry-check call
+  // 404s with "Candidate is not assigned to this project" even when the
+  // assignment genuinely exists (confirmed against a real portal-token HAR
+  // capture + booking-flow-api-sequence.json). portal-tokens accepts
+  // { candidateId, projectId } directly as an alternative to a
+  // portalToken from the invite email — so this works without ever
+  // touching yopmail/captcha, and yields a token whose `sub` IS the
+  // candidateId the booking service checks against.
+  const loginId = projectCandidateId || candidateId;
+  log('Flow', `Candidate login (portal-tokens): candidateId=${loginId} projectId=${projectId}`);
+  const loginResult = candidatePortalTokenLogin(loginId, projectId);
   const candidateToken = loginResult && loginResult.token;
   if (!candidateToken) {
-    log('Flow', `Candidate login FAILED for ${email} — no token returned`);
+    log('Flow', `Candidate portal-token login FAILED for candidateId=${loginId} — no token returned`);
     return [];
   }
-  log('Flow', `Candidate login SUCCESS for ${email} — orgId from login: ${loginResult.organizationId}`);
+  log('Flow', `Candidate portal-token login SUCCESS for candidateId=${loginId} — resolved candidateId=${loginResult.candidateId} orgId=${loginResult.organizationId}`);
 
   // Use organizationId from login response if available, otherwise use the one passed in
   const orgId = loginResult.organizationId || organizationId;
@@ -298,7 +522,23 @@ export function performAllActivities(email, password, candidateId, activities, o
   const candidateName = (email || 'candidate').split('@')[0];
 
   // Accept agreement first (mirrors the candidate clicking "I Agree" in the UI)
-  acceptCandidateAgreement(candidateToken, candidateId);
+  const actualCandidateId = loginResult.candidateId || projectCandidateId || candidateId;
+  if (actualCandidateId !== candidateId) {
+    log('Flow', `Using candidate profile ID ${actualCandidateId} for hardcoded candidate ${email}`);
+  }
+  acceptCandidateAgreement(candidateToken, actualCandidateId, projectId);
+
+  // Booking is optional for the existing hardcoded project. The candidate
+  // portal may already have admitted the candidate while the booking API
+  // still returns 404 for this legacy assignment.
+  if (String(__ENV.ENFORCE_BOOKING || 'true').toLowerCase() === 'true') {
+    if (!ensureCandidateBooking(candidateToken, projectId)) {
+      log('Flow', `Candidate booking entry denied for ${email} — skipping activity performance`);
+      return [];
+    }
+  } else {
+    log('Flow', 'Booking gate disabled; continuing with the existing activity session flow');
+  }
 
   log('Flow', `Processing all ${activities.length} activities`);
 
@@ -306,7 +546,7 @@ export function performAllActivities(email, password, candidateId, activities, o
 
   activities.forEach((activity) => {
     log('Flow', `Starting activity: ${activity.title} (${activity.type})`);
-    const res = submitActivity(candidateToken, candidateId, activity, candidateName);
+    const res = submitActivity(candidateToken, actualCandidateId, activity, candidateName, projectId);
     results.push({
       activity: activity.title || activity.type,
       status: res.status,

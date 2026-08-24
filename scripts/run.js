@@ -17,6 +17,11 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+const reportsDir = path.resolve(__dirname, '..', 'reports');
+if (!fs.existsSync(reportsDir)) {
+  fs.mkdirSync(reportsDir, { recursive: true });
+}
+
 // --- 1. Parse .env -----------------------------------------------------------
 const envPath = path.resolve(__dirname, '..', '.env');
 const env = {};

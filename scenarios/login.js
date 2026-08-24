@@ -111,8 +111,12 @@ export function candidateLogin(email, password = CANDIDATE_DEFAULT_PASSWORD) {
   });
 
   let organizationId = null;
+  let candidateId = null;
   try {
     const body = res.json();
+    const data = body.data || body;
+    const user = data.user || data.candidate || data.profile || data;
+    candidateId = user.id || user.userId || user.candidateId || null;
     const orgs = (body.data && body.data.organizations) || [];
     if (orgs.length > 0) {
       organizationId = orgs[0].organizationId;
@@ -123,11 +127,14 @@ export function candidateLogin(email, password = CANDIDATE_DEFAULT_PASSWORD) {
 
   // Fallback: if login response didn't include organizations, fetch from
   // the candidate profile endpoint (GET /users/me)
-  if (token && !organizationId) {
+  if (token && (!organizationId || !candidateId)) {
     try {
       const profileRes = getJson(routes.currentCandidateProfile(), token, 'Get Candidate Profile (orgId fallback)');
       logStep('Get Candidate Profile (orgId fallback)', profileRes);
       const profile = profileRes.json();
+      const profileData = profile.data || profile;
+      const profileUser = profileData.user || profileData.candidate || profileData.profile || profileData;
+      candidateId = profileUser.id || profileUser.userId || profileUser.candidateId || candidateId || null;
       const orgs = (profile.data && profile.data.organizations) || profile.organizations || [];
       if (orgs.length > 0) {
         organizationId = orgs[0].organizationId;
@@ -137,7 +144,51 @@ export function candidateLogin(email, password = CANDIDATE_DEFAULT_PASSWORD) {
     }
   }
 
-  return { token, organizationId };
+  return { token, organizationId, candidateId };
+}
+
+// Candidate login via portal-tokens — CONFIRMED against a real browser HAR
+// capture AND booking-flow-api-sequence.json as the ACTUAL session type the
+// candidate portal uses (POST /auth/candidate/portal-tokens). In the
+// captured JWT, `sub` === the response's own `candidateId` field, which is
+// the same id the booking service checks ProjectCandidates against — unlike
+// candidateLogin() above, whose token's `sub` does not reliably match a
+// ProjectCandidates.candidateId, causing every booking call to 404 with
+// "Candidate is not assigned to this project" regardless of the real
+// assignment.
+//
+// The endpoint accepts EITHER { portalToken } (from the invite email link —
+// blocked here by captcha on yopmail) OR { candidateId, projectId } directly
+// (per booking-flow-api-sequence.json body schema) — so this suite can mint
+// a real, booking-capable candidate session without ever touching email.
+export function candidatePortalTokenLogin(candidateId, projectId) {
+  const res = postJson(
+    routes.candidatePortalTokens(),
+    { candidateId, projectId },
+    null,
+    'Login - Candidate (portal-tokens)'
+  );
+  logStep('Login - Candidate (portal-tokens)', res);
+  const token = extractToken(res);
+  check(res, {
+    'candidate portal-token login: status 2xx': (r) => r.status >= 200 && r.status < 300,
+    'candidate portal-token login: token returned': () => !!token
+  });
+
+  let resolvedCandidateId = candidateId;
+  let organizationId = null;
+  let parentOrganizationId = null;
+  try {
+    const body = res.json();
+    const data = body.data || body;
+    resolvedCandidateId = data.candidateId || candidateId;
+    organizationId = data.organizationId || null;
+    parentOrganizationId = data.parentOrganizationId || null;
+  } catch (e) {
+    // ignore parse errors
+  }
+
+  return { token, candidateId: resolvedCandidateId, organizationId, parentOrganizationId };
 }
 
 function safeField(res, key) {
@@ -152,4 +203,4 @@ function safeField(res, key) {
 // Standalone-runnable: `k6 run scenarios/login.js`
 export default function () {
   superAdminLogin();
-}
+} 

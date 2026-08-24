@@ -40,6 +40,47 @@ function socketIoUrl() {
   return `${wsBase}/socket.io/?EIO=4&transport=websocket`;
 }
 
+export function joinBookingRoom(candidateToken, stepLabel = 'Booking room') {
+  const url = socketIoUrl();
+  let joined = false;
+  const res = ws.connect(url, {}, function (socket) {
+    socket.setTimeout(function () {
+      socket.close();
+    }, 8000);
+
+    socket.on('message', function (data) {
+      if (typeof data !== 'string') return;
+      if (data.startsWith('0{')) {
+        socket.send(`40${JSON.stringify({ token: `Bearer ${candidateToken}` })}`);
+        return;
+      }
+      if (data === '2') {
+        socket.send('3');
+        return;
+      }
+      if (data.startsWith('42')) {
+        const parsed = parseEventFrame(data);
+        if (!parsed) return;
+        const [event, payload] = parsed;
+        if (event === 'authenticated' && payload && payload.status === true) {
+          socket.send('42["booking:join"]');
+          return;
+        }
+        if (event === 'booking:join:ack') {
+          joined = true;
+          socket.send('41');
+          socket.close();
+        }
+      }
+    });
+  });
+
+  check(res, { [`${stepLabel}: websocket handshake 101`]: (r) => r && r.status === 101 });
+  check(null, { [`${stepLabel}: booking room joined`]: () => joined });
+  log('Socket', `${stepLabel}: booking room joined=${joined}`);
+  return joined;
+}
+
 // Parses a Socket.IO event frame like `42["event-name",{...}]` or
 // `420["event-name",{...}]` (ack id present) into [eventName, payload].
 // Returns null for anything that isn't a "42..." event frame (engine.io
