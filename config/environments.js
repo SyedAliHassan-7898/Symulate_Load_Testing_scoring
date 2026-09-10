@@ -26,6 +26,10 @@ export const CREDENTIALS = {
   superAdmin: {
     email: __ENV.SUPER_ADMIN_EMAIL || 'superadmin@yopmail.com',
     password: __ENV.SUPER_ADMIN_PASSWORD || 'Test@123'
+  },
+  clientAdmin: {
+    email: __ENV.CLIENT_ADMIN_EMAIL || '',
+    password: __ENV.CLIENT_ADMIN_PASSWORD || ''
   }
 };
 
@@ -68,7 +72,7 @@ export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLow
 export const CANDIDATE_DEFAULT_PASSWORD = __ENV.CANDIDATE_DEFAULT_PASSWORD || 'Test@123';
 export const CLIENT_ADMIN_DEFAULT_PASSWORD = __ENV.CLIENT_ADMIN_DEFAULT_PASSWORD || 'Test@123';
 
-// Hardcoded candidatecos with known working credentials for assessment.
+// Hardcoded candidates with known working credentials for assessment.
 // Used instead of CSV-imported candidates (whose passwords are unknown).
 // Add more entries here when scaling to load tests (7-8 candidates).
 export const HARDCODED_CANDIDATES = [
