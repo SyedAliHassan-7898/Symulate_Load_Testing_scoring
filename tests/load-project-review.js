@@ -9,7 +9,7 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
 import { buildThresholds } from '../config/thresholds.js';
 import { LOAD_MODE, SCENARIO, ANUM_API_ENABLED } from '../config/environments.js';
 import { reportName, log } from '../utils/helpers.js';
-import { projectReviewLogin, completeHardcodedProjectReviewFlow } from '../scenarios/projectreview.js';
+import { projectReviewLogin, completeProjectReviewFlow } from '../scenarios/projectreview.js';
 
 const LOAD_VUS = Number(__ENV.LOAD_VUS || 5);
 const LOAD_DURATION = __ENV.LOAD_DURATION || '2m';
@@ -48,7 +48,7 @@ export default function () {
   log('Project Review Load', `Starting phase load — mode=${LOAD_MODE} scenario=${SCENARIO} anum=${ANUM_API_ENABLED}`);
   const token = projectReviewLogin();
   if (!token) return;
-  completeHardcodedProjectReviewFlow(token);
+  completeProjectReviewFlow(token);
   sleep(1);
 }
 

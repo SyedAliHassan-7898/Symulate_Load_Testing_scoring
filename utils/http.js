@@ -137,3 +137,16 @@ export function extractId(res, key = 'id') {
     return null;
   }
 }
+
+/**
+ * Safely parse JSON response body.
+ * Returns null if parsing fails.
+ * Use this to avoid repeated try/catch blocks.
+ */
+export function getResponseBody(res) {
+  try {
+    return res.json();
+  } catch {
+    return null;
+  }
+}

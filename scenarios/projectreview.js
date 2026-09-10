@@ -1,29 +1,36 @@
-// Client Admin project review flow for the hardcoded project.
+// Client Admin project review flow.
 //
 // Mirrors Review Project.har:
-//   1. Load candidate scoring list for the hardcoded project
+//   1. Load candidate scoring list for the project
 //   2. Load project details, bands, and candidate stages
 //   3. Open each activity score detail
 //   4. PATCH reviewer score/reason for each reviewable sub-skill
 //   5. Load review summary, submit stage review, and fetch report
 
 import { check, sleep } from 'k6';
-import { getJson, getJsonWithHeaders, postJsonWithHeaders, patchJsonWithHeaders } from '../utils/http.js';
+import { getJson, getJsonWithHeaders, postJsonWithHeaders, patchJsonWithHeaders, getResponseBody } from '../utils/http.js';
 import { log, logStep } from '../utils/helpers.js';
 import { routes } from '../utils/routes.js';
 import { PORTALS, HARDCODED_CANDIDATES } from '../config/environments.js';
 import { superAdminLogin, clientAdminLogin, impersonateClientAdmin } from './login.js';
 
+// Review configuration from environment
 const REVIEW_REASON = __ENV.PROJECT_REVIEW_REASON || 'good';
 const REVIEW_SCORE_OVERRIDE = __ENV.PROJECT_REVIEW_SCORE ? Number(__ENV.PROJECT_REVIEW_SCORE) : null;
 const REVIEW_SCORE_MAX_ATTEMPTS = Number(__ENV.PROJECT_REVIEW_MAX_ATTEMPTS || 8);
 const REVIEW_SCORE_RETRY_DELAY_SECONDS = Number(__ENV.PROJECT_REVIEW_RETRY_DELAY_SECONDS || 2);
 const DEFAULT_REVIEW_CLIENT_ADMIN_USER_ID = 'd782f765-9d74-43c5-a268-e99e8246ac55';
+
+// Client admin portal headers
 const CLIENT_ADMIN_HEADERS = {
   'x-base-origin': 'client-admin',
   Origin: PORTALS.clientAdmin,
   Referer: `${PORTALS.clientAdmin}/`
 };
+
+// Test data only: deterministic scoring pattern for load testing
+// NOT for production review logic - production should use evidence-based scoring
+const TEST_SCORE_PATTERN = [2, 4, 3, 5, 1, 4, 2, 5];
 
 function reviewProjectId() {
   return (
@@ -48,7 +55,7 @@ export function projectReviewLogin() {
   return impersonateClientAdmin(superAdminToken, clientAdminUserId);
 }
 
-export function completeHardcodedProjectReviewFlow(
+export function completeProjectReviewFlow(
   token,
   projectId = reviewProjectId(),
   candidates = HARDCODED_CANDIDATES
@@ -165,14 +172,12 @@ function resolveProjectAdminUserId(superAdminToken, projectId) {
 }
 
 function extractProjectOrganization(res) {
-  try {
-    const body = res.json();
-    const project = body && body.data;
-    const org = (project && project.organization) || {};
-    return { id: org.id || project.organizationId || null, name: org.name || project.organizationName || null };
-  } catch (e) {
-    return { id: null, name: null };
-  }
+  const body = getResponseBody(res);
+  if (!body) return { id: null, name: null };
+  
+  const project = body && body.data;
+  const org = (project && project.organization) || {};
+  return { id: org.id || project.organizationId || null, name: org.name || project.organizationName || null };
 }
 
 function extractAdminUserId(res, projectOrg) {
@@ -187,12 +192,8 @@ function extractAdminUserId(res, projectOrg) {
 }
 
 function safeDataObject(res) {
-  try {
-    const body = res.json();
-    return body && body.data && !Array.isArray(body.data) ? body.data : null;
-  } catch (e) {
-    return null;
-  }
+  const body = getResponseBody(res);
+  return body && body.data && !Array.isArray(body.data) ? body.data : null;
 }
 
 function reviewActivity(token, projectId, candidateId, activity, activityIndex) {
@@ -380,35 +381,33 @@ function extractStages(res) {
 }
 
 function extractReviewItems(res, fallbackStageCandidateId, fallbackActivityId, activityType, activityIndex = 0) {
-  try {
-    const body = res.json();
-    const activity = body && body.data && body.data.activity;
-    const stageCandidateId = (activity && activity.stageCandidateId) || fallbackStageCandidateId;
-    const activityId = (activity && activity.id) || fallbackActivityId;
-    const skills = (activity && activity.skills) || [];
-    const items = [];
+  const body = getResponseBody(res);
+  if (!body) return [];
+  
+  const activity = body && body.data && body.data.activity;
+  const stageCandidateId = (activity && activity.stageCandidateId) || fallbackStageCandidateId;
+  const activityId = (activity && activity.id) || fallbackActivityId;
+  const skills = (activity && activity.skills) || [];
+  const items = [];
 
-    skills.forEach((skill, skillIndex) => {
-      (skill.subSkills || []).forEach((subSkill, subSkillIndex) => {
-        const skillId = skill.skillId || skill.id;
-        const subSkillId = subSkill.subSkillId || subSkill.id;
-        if (!skillId || !subSkillId) return;
-        const score = reviewScore(activityType, activityIndex, skillIndex, subSkillIndex, subSkill.score);
-        items.push({
-          stageCandidateId,
-          activityId,
-          skillId,
-          subSkillId,
-          reviewerScore: score,
-          reviewerScoreReason: reviewReason(score, skill.skillName, subSkill.subSkillName)
-        });
+  skills.forEach((skill, skillIndex) => {
+    (skill.subSkills || []).forEach((subSkill, subSkillIndex) => {
+      const skillId = skill.skillId || skill.id;
+      const subSkillId = subSkill.subSkillId || subSkill.id;
+      if (!skillId || !subSkillId) return;
+      const score = generateTestReviewScore(activityType, activityIndex, skillIndex, subSkillIndex, subSkill.score);
+      items.push({
+        stageCandidateId,
+        activityId,
+        skillId,
+        subSkillId,
+        reviewerScore: score,
+        reviewerScoreReason: reviewReason(score, skill.skillName, subSkill.subSkillName)
       });
     });
+  });
 
-    return items.filter((item) => item.stageCandidateId && item.activityId);
-  } catch (e) {
-    return [];
-  }
+  return items.filter((item) => item.stageCandidateId && item.activityId);
 }
 
 function getMissingReviewDataReason(res) {
@@ -427,10 +426,16 @@ function getMissingReviewDataReason(res) {
   }
 }
 
-function reviewScore(activityType, activityIndex, skillIndex, subSkillIndex, systemScore) {
+/**
+ * Generate a test score for load testing purposes.
+ * Uses a deterministic pattern based on activity/skill indexes.
+ * 
+ * WARNING: This is TEST DATA ONLY. Production review logic should use
+ * evidence-based scoring from actual reviewer assessment.
+ */
+function generateTestReviewScore(activityType, activityIndex, skillIndex, subSkillIndex, systemScore) {
   if (Number.isFinite(REVIEW_SCORE_OVERRIDE)) return REVIEW_SCORE_OVERRIDE;
 
-  const pattern = [2, 4, 3, 5, 1, 4, 2, 5];
   const typeOffset = {
     CASE: 0,
     INTERVIEW: 1,
@@ -439,8 +444,9 @@ function reviewScore(activityType, activityIndex, skillIndex, subSkillIndex, sys
     SITUATIONS: 4,
     WELCOME: 5
   }[activityType] || 0;
-  const index = (activityIndex + typeOffset + skillIndex * 2 + subSkillIndex) % pattern.length;
-  return pattern[index] || systemScore || 3;
+  
+  const index = (activityIndex + typeOffset + skillIndex * 2 + subSkillIndex) % TEST_SCORE_PATTERN.length;
+  return TEST_SCORE_PATTERN[index] || systemScore || 3;
 }
 
 function reviewReason(score, skillName, subSkillName) {
@@ -529,5 +535,5 @@ function reviewPatch(url, body, token, name) {
 export default function () {
   const token = projectReviewLogin();
   if (!token) return;
-  completeHardcodedProjectReviewFlow(token);
+  completeProjectReviewFlow(token);
 }
