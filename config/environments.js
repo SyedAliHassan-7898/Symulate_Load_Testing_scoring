@@ -53,10 +53,7 @@ export const SEND_CLIENT_EMAIL = String(__ENV.SEND_CLIENT_EMAIL || 'true').toLow
 // Hardcoded assessment access values used for the booked candidate flow.
 // These are intentionally fixed so the smoke/demo path always points to
 // the same candidate/project/booking trio unless you change them here.
-export const HARDCODED_ASSESSMENT_CANDIDATE_ID = 'c5553a15-b541-4a32-91dd-d7b651ddf2ff';
-export const HARDCODED_ASSESSMENT_PROJECT_ID = 'a9a20e49-4c94-4eb7-bef0-7ef3a66ad5d0';
-export const HARDCODED_ASSESSMENT_BOOKING_ID = '481cc038-d99c-431b-913f-a89adf13d089';
-export const HARDCODED_ASSESSMENT_BOOKING_START_AT = '2026-08-24T11:05:00.000Z';
+
 
 // CONFIRMED gap (still open): POST /candidate/upload-candidates only
 // returns { totalRows, queued, errors } — no per-candidate credentials or
